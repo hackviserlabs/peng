@@ -171,8 +171,10 @@ export default function Editor({ selectedFinding, onUpdateField, onDelete, onDup
                 <CvssCalculatorModal
                     open={cvssModalOpen}
                     onClose={() => setCvssModalOpen(false)}
-                    onApply={({ score, severity, applySeverity }) => {
+                    initialVector={selectedFinding.cvssVector ?? ''}
+                    onApply={({ score, severity, vector, applySeverity }) => {
                         onUpdateField('cvss', score);
+                        onUpdateField('cvssVector', vector);
                         if (applySeverity) {
                             onUpdateField('severity', severity as Severity);
                         }

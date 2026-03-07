@@ -82,6 +82,40 @@ export function buildCvssVector(metrics: CvssBaseMetrics, version: '3.0' | '3.1'
     ].join('/');
 }
 
+export function parseCvssVector(vector: string): CvssBaseMetrics | null {
+    if (!vector) return null;
+    const parts = vector.split('/');
+    if (parts.length < 2) return null;
+
+    const metrics: Partial<CvssBaseMetrics> = {};
+
+    for (const part of parts) {
+        if (part.startsWith('CVSS:')) continue;
+        const [key, value] = part.split(':') as [keyof CvssBaseMetrics | string, string | undefined];
+        if (!value) continue;
+        switch (key) {
+            case 'AV':
+            case 'AC':
+            case 'PR':
+            case 'UI':
+            case 'S':
+            case 'C':
+            case 'I':
+            case 'A':
+                (metrics as any)[key] = value;
+                break;
+            default:
+                break;
+        }
+    }
+
+    if (!metrics.AV || !metrics.AC || !metrics.PR || !metrics.UI || !metrics.S || !metrics.C || !metrics.I || !metrics.A) {
+        return null;
+    }
+
+    return metrics as CvssBaseMetrics;
+}
+
 export function calculateCvssScore(metrics: CvssBaseMetrics): number {
     const av = AV_WEIGHTS[metrics.AV];
     const ac = AC_WEIGHTS[metrics.AC];
