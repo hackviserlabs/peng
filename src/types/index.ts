@@ -55,6 +55,7 @@ export interface Finding {
     cve: string;
     cwe: string;
     cvss: string;
+    cvssVector?: string;
     references: string;
     // Content blocks
     description: string;
@@ -109,6 +110,7 @@ export function createDefaultFinding(projectId: string): Finding {
         cve: '',
         cwe: '',
         cvss: '',
+        cvssVector: '',
         references: '',
         description: '',
         poc: '',

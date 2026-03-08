@@ -4,7 +4,8 @@ import EditorToolbar from './EditorToolbar';
 import FindingTitle from './FindingTitle';
 import ContentBlock from './ContentBlock';
 import { FindingDetail } from '../../templates/default/FindingDetail';
-import type { Finding } from '../../types';
+import type { Finding, Severity } from '../../types';
+import CvssCalculatorModal from './CvssCalculatorModal';
 
 const OPTIONAL_SECTIONS = [
     { key: 'poc' as const, label: 'Proof of Concept', icon: FlaskConical, iconClass: 'text-purple-400/70', placeholder: 'Step-by-step instructions to reproduce the vulnerability...' },
@@ -24,6 +25,7 @@ interface EditorProps {
 
 export default function Editor({ selectedFinding, onUpdateField, onDelete, onDuplicate }: EditorProps) {
     const [visibleSections, setVisibleSections] = useState<Set<SectionKey>>(new Set());
+    const [cvssModalOpen, setCvssModalOpen] = useState(false);
 
     // Auto-show sections that already have content when switching findings
     useEffect(() => {
@@ -68,6 +70,7 @@ export default function Editor({ selectedFinding, onUpdateField, onDelete, onDup
                             <FindingTitle
                                 finding={selectedFinding}
                                 onUpdate={onUpdateField}
+                                onOpenCvssCalculator={() => setCvssModalOpen(true)}
                             />
 
                             <div className="space-y-8 print:space-y-8">
@@ -162,6 +165,21 @@ export default function Editor({ selectedFinding, onUpdateField, onDelete, onDup
                 <div className="hidden print:block print:bg-white print:text-black">
                     <FindingDetail finding={selectedFinding} index={0} />
                 </div>
+            )}
+
+            {selectedFinding && (
+                <CvssCalculatorModal
+                    open={cvssModalOpen}
+                    onClose={() => setCvssModalOpen(false)}
+                    initialVector={selectedFinding.cvssVector ?? ''}
+                    onApply={({ score, severity, vector, applySeverity }) => {
+                        onUpdateField('cvss', score);
+                        onUpdateField('cvssVector', vector);
+                        if (applySeverity) {
+                            onUpdateField('severity', severity as Severity);
+                        }
+                    }}
+                />
             )}
         </main>
     );

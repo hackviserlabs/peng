@@ -53,9 +53,10 @@ function getCvssLabel(value: string): string {
 interface FindingTitleProps {
     finding: Finding;
     onUpdate: (field: keyof Finding, value: string) => void;
+    onOpenCvssCalculator?: () => void;
 }
 
-export default function FindingTitle({ finding, onUpdate }: FindingTitleProps) {
+export default function FindingTitle({ finding, onUpdate, onOpenCvssCalculator }: FindingTitleProps) {
     const sevDropdown = useDropdown();
     const statusDropdown = useDropdown();
     const addDropdown = useDropdown();
@@ -229,6 +230,15 @@ export default function FindingTitle({ finding, onUpdate }: FindingTitleProps) {
                                         placeholder="0.0"
                                         className="w-16 bg-transparent text-xs text-zinc-300 placeholder-zinc-600 outline-none px-2 py-1 rounded hover:bg-zinc-700/30 focus:bg-zinc-700/30 transition-colors"
                                     />
+                                    {onOpenCvssCalculator && (
+                                        <button
+                                            type="button"
+                                            onClick={onOpenCvssCalculator}
+                                            className="text-[11px] px-2 py-1 rounded-md border border-zinc-700 text-zinc-300 hover:bg-zinc-800/60 hover:border-zinc-500 transition-colors"
+                                        >
+                                            Calculate
+                                        </button>
+                                    )}
                                 </div>
                                 <button onClick={() => removeProperty(prop.key)} className="p-1 text-zinc-600 hover:text-zinc-400 opacity-0 group-hover:opacity-100 transition-opacity mr-1" title="Remove">×</button>
                             </div>
