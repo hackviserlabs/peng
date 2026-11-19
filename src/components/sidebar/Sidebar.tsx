@@ -17,7 +17,7 @@ interface SidebarProps {
     selectedFindingId: string | null;
     activeView: 'editor' | 'settings';
     searchTerm: string;
-    lastSaved: Date | null;
+    saveStatus?: 'saving' | 'saved';
     onSearchChange: (value: string) => void;
     onSelectFinding: (id: string) => void;
     onAddFinding: () => void;
@@ -36,7 +36,7 @@ export default function Sidebar({
     selectedFindingId,
     activeView,
     searchTerm,
-    lastSaved,
+    saveStatus,
     onSearchChange,
     onSelectFinding,
     onAddFinding,
@@ -71,7 +71,7 @@ export default function Sidebar({
             <SidebarHeader
                 projectName={projectName}
                 searchTerm={searchTerm}
-                lastSaved={lastSaved}
+                saveStatus={saveStatus}
                 onSearchChange={onSearchChange}
                 onAddFinding={onAddFinding}
                 onExport={onExport}

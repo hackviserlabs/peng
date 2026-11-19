@@ -34,6 +34,7 @@ export interface Project {
     classification: Classification;
     scope: string;
     executiveSummary: string;
+    templateInstructions?: string;
     createdAt: string;
     updatedAt: string;
 }
