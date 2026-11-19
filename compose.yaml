@@ -15,14 +15,15 @@ services:
 
   server:
     build:
-      context: ./server
-      dockerfile: ../docker/server.Dockerfile
+      context: .
+      dockerfile: docker/server.Dockerfile
     init: true
     environment:
       PORT: "3000"
       DATABASE_PATH: /data/peng.sqlite
       ADMIN_USERNAME: ${ADMIN_USERNAME:?Set ADMIN_USERNAME in .env}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      APP_ORIGIN: ${APP_ORIGIN:-}
       COOKIE_SECURE: "${COOKIE_SECURE:-false}"
     volumes:
       - peng-data:/data

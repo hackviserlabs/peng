@@ -73,7 +73,7 @@ docker compose port web 8080
 
 Open the displayed loopback address over HTTP and sign in with the admin credentials. The default `PENG_PORT=0` picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed address. The only published service is nginx, which serves the frontend and forwards `/api/`, `/mcp` (Streamable HTTP), and the `/healthz` readiness check on the same origin. nginx accepts request bodies up to 32 MiB.
 
-Keep `COOKIE_SECURE=false` for local HTTP. For HTTPS, point your TLS reverse proxy at a fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `COOKIE_SECURE=true` in `.env` and rerun `docker compose up -d` to apply it.
+Keep `COOKIE_SECURE=false` for local HTTP. For HTTPS, point your TLS reverse proxy at a fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `APP_ORIGIN=https://your-public-host` and `COOKIE_SECURE=true` in `.env` and rerun `docker compose up -d` to apply it.
 
 The server image installs dependencies from `server/package-lock.json` and runs `npm start` on Node 24. The server binds to `0.0.0.0:3000` inside Compose and stores SQLite at `/data/peng.sqlite`.
 

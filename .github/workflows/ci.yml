@@ -24,25 +24,27 @@ jobs:
     runs-on: ubuntu-latest
     env:
       ADMIN_USERNAME: ci-admin
-      ADMIN_PASSWORD: ci-only-password
+      ADMIN_PASSWORD: ci-only-fresh-database-7LwuoRK9
     steps:
       - uses: actions/checkout@v4
       - run: docker compose config --quiet
-      - name: Build frontend image and validate nginx config
-        if: ${{ hashFiles('server/**') == '' }}
-        run: |
-          docker build -t peng-web:ci .
-          docker run --rm --entrypoint nginx peng-web:ci -t
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --ignore-scripts --prefix server
+      - run: npm test --prefix server
       - name: Build and smoke test the Compose stack
-        if: ${{ hashFiles('server/**') != '' }}
         run: |
           docker compose up --build -d --wait --wait-timeout 120
           url="http://$(docker compose port web 8080)"
           curl --fail --silent --show-error --max-time 10 "$url/" | grep -F 'id="root"'
           curl --fail --silent --show-error --max-time 10 "$url/healthz"
+          SMOKE_URL="$url" node server/scripts/smoke-compose.mjs
       - name: Show Compose logs
-        if: ${{ failure() && hashFiles('server/**') != '' }}
+        if: ${{ failure() }}
         run: docker compose logs
       - name: Remove CI containers and volume
-        if: ${{ always() && hashFiles('server/**') != '' }}
+        if: ${{ always() }}
         run: docker compose down --volumes
