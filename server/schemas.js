@@ -65,7 +65,7 @@ export const finding = z.strictObject({
   remediation: string,
   notes: string,
   createdAt: string,
-  confidence: findingConfidence.optional(),
+  confidence: findingConfidence.nullish(),
   triageNotes: text.optional(),
   evidence: z.array(metadata).max(100).optional(),
   targets: z.array(findingTarget).max(100).optional(),

@@ -187,7 +187,7 @@ export function createApp({
     const { id, findingId } = req.params;
     const parsed = schemas.finding.safeParse(req.body);
     if (!parsed.success || parsed.data.id !== findingId || parsed.data.projectId !== id) return invalidBody(res);
-    const inserted = statements.putFinding.run(findingId, JSON.stringify(parsed.data), req.user.id, id);
+    const inserted = statements.putFinding.run({ data: JSON.stringify(parsed.data) }, findingId, req.user.id, id);
     if (!inserted.changes) return notFound(res);
     res.status(204).end();
   });

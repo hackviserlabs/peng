@@ -422,6 +422,8 @@ test('the finding API validates triage metadata and preserves it when older clie
   assert.deepEqual(await load(), expected);
   assert.equal((await save({ ...edited, evidence: [], targets: [], tags: [], triageNotes: '' })).status, 204);
   assert.deepEqual(await load(), { ...expected, evidence: [], targets: [], tags: [], triageNotes: '' });
+  assert.equal((await save({ ...edited, confidence: null })).status, 204);
+  assert.equal('confidence' in await load(), false);
 });
 
 test('bootstrap credentials are required for a fresh database and never overwrite an existing account', async (t) => {

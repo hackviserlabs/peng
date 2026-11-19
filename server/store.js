@@ -142,8 +142,8 @@ export function openStore(path, { local, username, password }) {
     // Older clients omit optional finding fields when saving.
     putFinding: db.prepare(`
       INSERT INTO findings (owner_id, project_id, id, data)
-      SELECT owner_id, id, ?, ? FROM projects WHERE owner_id = ? AND id = ?
-      ON CONFLICT (owner_id, project_id, id) DO UPDATE SET data = json_patch(findings.data, excluded.data)
+      SELECT owner_id, id, ?, json_patch('{}', @data) FROM projects WHERE owner_id = ? AND id = ?
+      ON CONFLICT (owner_id, project_id, id) DO UPDATE SET data = json_patch(findings.data, @data)
     `),
     deleteFinding: db.prepare('DELETE FROM findings WHERE owner_id = ? AND project_id = ? AND id = ?'),
     insertFinding: db.prepare('INSERT INTO findings (owner_id, project_id, id, data) VALUES (?, ?, ?, ?)'),

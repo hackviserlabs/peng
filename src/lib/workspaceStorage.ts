@@ -9,7 +9,10 @@ export const workspaceStorage = serverMode ? {
     getProjectFindings: (id: string) => api<Finding[]>(`${projectPath(id)}/findings`, 'Loading findings'),
     saveFinding: (finding: Finding) => api(
         `${projectPath(finding.projectId)}/findings/${encodeURIComponent(finding.id)}`,
-        'Saving finding', 'PUT', finding,
+        'Saving finding', 'PUT',
+        'confidence' in finding && finding.confidence === undefined
+            ? { ...finding, confidence: null }
+            : finding,
     ),
     deleteFinding: (projectId: string, id: string) => api(
         `${projectPath(projectId)}/findings/${encodeURIComponent(id)}`, 'Deleting finding', 'DELETE',
