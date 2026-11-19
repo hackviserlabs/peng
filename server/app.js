@@ -14,6 +14,7 @@ const newToken = () => randomBytes(32).toString('base64url');
 const notFound = (res) => res.status(404).json({ error: 'Not found' });
 const unauthorized = (res) => res.status(401).json({ error: 'Unauthorized' });
 const invalidBody = (res) => res.status(400).json({ error: 'Invalid request body' });
+const loopbackHosts = new Set(['localhost', '127.0.0.1', '[::1]']);
 
 function parseOrigin(value) {
   const url = new URL(value);
@@ -25,19 +26,24 @@ function parseOrigin(value) {
 }
 
 export function createApp({
+  mode = 'organization',
   databasePath,
   adminUsername,
   adminPassword,
   cookieSecure = true,
   appOrigin,
 }) {
-  const publicOrigin = appOrigin ? parseOrigin(appOrigin) : undefined;
-  if ((adminUsername !== undefined || adminPassword !== undefined)
+  if (!['local', 'organization'].includes(mode)) {
+    throw new Error('DEPLOY_MODE must be local or organization');
+  }
+  const local = mode === 'local';
+  const publicOrigin = !local && appOrigin ? parseOrigin(appOrigin) : undefined;
+  if (!local && (adminUsername !== undefined || adminPassword !== undefined)
       && !schemas.credentials.safeParse({ username: adminUsername, password: adminPassword }).success) {
     throw new Error('Provide both valid ADMIN_USERNAME and ADMIN_PASSWORD values');
   }
 
-  const store = openStore(databasePath, adminUsername, adminPassword);
+  const store = openStore(databasePath, { mode, username: adminUsername, password: adminPassword });
   const { statements } = store;
   const mcp = createMcpEndpoint(store);
   const app = express();
@@ -54,6 +60,7 @@ export function createApp({
     if (!authority) return;
     try {
       const url = parseOrigin(`${publicOrigin?.protocol ?? 'http:'}//${authority}`);
+      if (local && !loopbackHosts.has(url.hostname)) return;
       if (!publicOrigin || url.host === publicOrigin.host) return url.origin;
     } catch {
       // Reject malformed Host values.
@@ -73,12 +80,17 @@ export function createApp({
     if (!origin || (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('origin') !== origin)) {
       return res.status(403).json({ error: 'Invalid request origin' });
     }
-    // Host-only cookies are shared between ports. Use the public origin for the name.
-    req.sessionCookie = `peng_session_${digest(origin).slice(0, 16)}`;
-    const token = parseCookie(req.get('cookie') ?? '')[req.sessionCookie];
-    if (/^[A-Za-z0-9_-]{43}$/.test(token ?? '')) req.sessionToken = token;
+    if (!local) {
+      // Host-only cookies are shared between ports. Use the public origin for the name.
+      req.sessionCookie = `peng_session_${digest(origin).slice(0, 16)}`;
+      const token = parseCookie(req.get('cookie') ?? '')[req.sessionCookie];
+      if (/^[A-Za-z0-9_-]{43}$/.test(token ?? '')) req.sessionToken = token;
+    }
     next();
   });
+
+  api.get('/config', (_req, res) => res.json({ mode }));
+  if (local) api.all(['/login', '/logout'], (_req, res) => notFound(res));
 
   api.post('/login', loginJson, async (req, res) => {
     const parsed = schemas.credentials.safeParse(req.body);
@@ -108,13 +120,15 @@ export function createApp({
   });
 
   api.use((req, res, next) => {
-    const user = req.sessionToken && statements.session.get(digest(req.sessionToken), Date.now());
+    const user = local
+      ? { id: store.localOwnerId }
+      : req.sessionToken && statements.session.get(digest(req.sessionToken), Date.now());
     if (!user) return unauthorized(res);
     req.user = user;
     next();
   });
 
-  api.get('/session', (req, res) => res.json({ username: req.user.username }));
+  api.get('/session', (req, res) => res.json(local ? { mode } : { username: req.user.username }));
 
   api.get('/projects', (req, res) => {
     res.json(statements.projects.all(req.user.id).map(({ data, template_instructions }) => {
@@ -139,6 +153,7 @@ export function createApp({
 
   const project = express.Router({ mergeParams: true });
   api.use('/projects/:id', project);
+  if (local) project.use('/keys', (_req, res) => notFound(res));
   project.use((req, res, next) => {
     if (!statements.project.get(req.user.id, req.params.id)) return notFound(res);
     next();
@@ -188,6 +203,7 @@ export function createApp({
     if (!origin || (req.get('origin') !== undefined && req.get('origin') !== origin)) {
       return res.status(403).json({ error: 'Invalid request origin' });
     }
+    if (local) return next();
     const token = /^Bearer (peng_[A-Za-z0-9_-]{43})$/i.exec(req.get('authorization') ?? '')?.[1];
     const keyDigest = token && digest(token);
     const key = keyDigest && statements.mcpProject.get(keyDigest);

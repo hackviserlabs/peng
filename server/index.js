@@ -2,6 +2,8 @@ import { createApp } from './app.js';
 
 const {
   PORT = '3000',
+  DEPLOY_MODE = 'organization',
+  BIND_HOST = DEPLOY_MODE === 'local' ? '127.0.0.1' : '0.0.0.0',
   DATABASE_PATH = './data/peng.sqlite3',
   COOKIE_SECURE = 'true',
   ADMIN_USERNAME,
@@ -15,14 +17,15 @@ if (!DATABASE_PATH) throw new Error('DATABASE_PATH must be nonempty');
 
 process.umask(0o077);
 const backend = createApp({
+  mode: DEPLOY_MODE,
   databasePath: DATABASE_PATH,
-  adminUsername: ADMIN_USERNAME,
-  adminPassword: ADMIN_PASSWORD,
+  adminUsername: ADMIN_USERNAME || undefined,
+  adminPassword: ADMIN_PASSWORD || undefined,
   cookieSecure: COOKIE_SECURE === 'true',
   appOrigin: APP_ORIGIN,
 });
 
-const server = backend.app.listen(Number(PORT), '0.0.0.0', () => {
+const server = backend.app.listen(Number(PORT), BIND_HOST, () => {
   console.log(`peng server listening on port ${server.address().port}`);
 });
 

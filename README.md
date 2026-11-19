@@ -64,30 +64,46 @@ The production build will be in the `dist/` directory. You can deploy it to any 
 
 ## Docker Deployment
 
-Use Docker with the Compose plugin. Copy `.env.example` to `.env` and set `ADMIN_USERNAME` and `ADMIN_PASSWORD`. Then run:
+Run these commands from the repository root with Docker Compose. Each setup block creates a fresh `.env`. For an existing deployment, edit `.env` in place.
+
+### Local workspace
+
+Use local mode on a trusted machine. Open the printed address in your browser to work without signing in.
 
 ```bash
-docker compose up --build -d --wait
+(umask 077; set -C; cat .env.example > .env) &&
+docker compose up --build -d --wait &&
 docker compose port web 8080
 ```
 
-Open the displayed loopback address over HTTP and sign in with the admin credentials. The default `PENG_PORT=0` picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed address. The only published service is nginx, which serves the frontend and forwards `/api/`, `/mcp` (Streamable HTTP), and the `/healthz` readiness check on the same origin. nginx accepts request bodies up to 32 MiB.
+Connect a reporting agent over Streamable HTTP at `http://<printed-address>/mcp`. Call `list_projects` to find the project's ID, then pass it as `projectId` to `list_templates`, `get_template`, and `append_finding`.
 
-Keep `COOKIE_SECURE=false` for local HTTP. For HTTPS, point your TLS reverse proxy at a fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `APP_ORIGIN=https://your-public-host` and `COOKIE_SECURE=true` in `.env` and rerun `docker compose up -d` to apply it.
+### Organization workspace
 
-The server image installs dependencies from `server/package-lock.json` and runs `npm start` on Node 24. The server binds to `0.0.0.0:3000` inside Compose and stores SQLite at `/data/peng.sqlite`.
+Use organization mode for signed-in access. Sign in at the printed address over HTTP as `admin` with the generated password saved in `.env`.
 
-Compose uses the worktree directory name as the project name by default. Choose a distinct `COMPOSE_PROJECT_NAME` in each `.env` if directory names collide. Each project has its own `peng-data` volume. `docker compose down` preserves it, while `docker compose down -v` deletes it and the reports it holds.
+```bash
+(umask 077
+ set -C
+ password="$(openssl rand -hex 24)" &&
+ printf 'DEPLOY_MODE=organization\nADMIN_USERNAME=admin\nADMIN_PASSWORD=%s\n' "$password" > .env) &&
+docker compose up --build -d --wait &&
+docker compose port web 8080
+```
 
-### Connect a reporting agent
+Organization mode is the default when `DEPLOY_MODE` is unset. Its first startup requires a username and a strong password, including when converting a local workspace. After bootstrap it uses the saved account.
 
-1. Open the project settings and enter the writing instructions you want the agent to follow.
-2. Under **MCP access**, create a named key for the agent and copy it while it is visible.
-3. Configure the client for Streamable HTTP using the displayed endpoint. Store the key in the client's secret store and send it in the `Authorization: Bearer <key>` header.
-4. Have the agent read the project instructions before submitting a finding. Reuse the same idempotency key when retrying a submission. Findings appear in the open editor after the next refresh.
-5. Revoke the key in the same settings panel when the agent no longer needs access.
+For HTTPS, point your TLS reverse proxy at a fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `APP_ORIGIN=https://your-public-host` and `COOKIE_SECURE=true` in `.env` and rerun `docker compose up -d --wait`.
 
-The browser workspace and the server keep separate data. To move a local report, export its JSON in the local app and import it into the signed-in workspace. The [backend reference](server/README.md) covers API routes, template discovery and MCP tool inputs.
+In your project settings, create a named key under **MCP access** and copy it while it is visible. Configure the client for Streamable HTTP using the displayed endpoint and the `Authorization: Bearer <key>` header. The key selects the project. Start with `list_templates` using `{}` and revoke the key in project settings when the agent's work is done.
+
+### Ports and data
+
+Both modes publish nginx on `127.0.0.1` with `PENG_PORT=0` by default, which picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed address. nginx serves the frontend and proxies `/api/`, `/mcp`, and `/healthz`. Keep local mode on loopback.
+
+Both modes use the same `peng-data` SQLite volume for a given Compose project. Keep the Compose project name when switching modes to keep your reports. Compose derives the project name from the checkout directory by default. Set a distinct `COMPOSE_PROJECT_NAME` if directory names collide. `docker compose down` preserves the volume. `docker compose down -v` deletes it.
+
+Set writing instructions in project settings and have the agent read them with `list_templates` before submitting a finding. Reuse the same idempotency key when retrying. Findings appear in the open editor after the next refresh. To move reports from the static browser workspace to Docker, export JSON from the static app and import it in Docker. See the [backend reference](server/README.md) for API and MCP tool inputs.
 
 ## Usage
 

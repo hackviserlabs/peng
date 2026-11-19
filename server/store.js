@@ -17,9 +17,10 @@ export function digest(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export function openStore(path, username, password) {
+export function openStore(path, { mode, username, password }) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path);
+  let localOwnerId;
   try {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
@@ -72,10 +73,15 @@ export function openStore(path, username, password) {
       );
     `);
 
-    db.transaction(() => {
-      if (db.prepare('SELECT 1 FROM users LIMIT 1').get()) return;
+    localOwnerId = db.transaction(() => {
+      const owner = db.prepare('SELECT id, username FROM users ORDER BY id LIMIT 1').get();
+      if (mode === 'local') {
+        // An empty username reserves the workspace owner until an admin is configured.
+        return owner?.id ?? db.prepare("INSERT INTO users (username, salt, password_hash) VALUES ('', '', '')").run().lastInsertRowid;
+      }
+      if (owner?.username) return;
       if (!username || !password) {
-        throw new Error('Set ADMIN_USERNAME and ADMIN_PASSWORD to initialize an empty database');
+        throw new Error('Set ADMIN_USERNAME and ADMIN_PASSWORD to initialize an empty database or enable organization mode on a local workspace');
       }
       const trimmed = password.trim();
       const normalized = trimmed.toLowerCase();
@@ -85,7 +91,12 @@ export function openStore(path, username, password) {
       }
       const salt = randomBytes(16).toString('hex');
       const hash = scryptSync(password, salt, 64).toString('hex');
-      db.prepare('INSERT INTO users (username, salt, password_hash) VALUES (?, ?, ?)').run(username, salt, hash);
+      if (owner) {
+        db.prepare('UPDATE users SET username = ?, salt = ?, password_hash = ? WHERE id = ?')
+          .run(username, salt, hash, owner.id);
+      } else {
+        db.prepare('INSERT INTO users (username, salt, password_hash) VALUES (?, ?, ?)').run(username, salt, hash);
+      }
     }).immediate();
   } catch (error) {
     db.close();
@@ -104,7 +115,10 @@ export function openStore(path, username, password) {
     deleteExpiredSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
     insertSession: db.prepare('INSERT INTO sessions (digest, owner_id, expires_at) VALUES (?, ?, ?)'),
     projects: db.prepare('SELECT data, template_instructions FROM projects WHERE owner_id = ?'),
-    project: db.prepare('SELECT 1 FROM projects WHERE owner_id = ? AND id = ?'),
+    project: db.prepare('SELECT owner_id, id, template_instructions FROM projects WHERE owner_id = ? AND id = ?'),
+    projectSummaries: db.prepare(`
+      SELECT id, json_extract(data, '$.name') AS name FROM projects WHERE owner_id = ? ORDER BY id
+    `),
     putProject: db.prepare(`
       INSERT INTO projects (owner_id, id, data, template_instructions) VALUES (?, ?, ?, ?)
       ON CONFLICT (owner_id, id) DO UPDATE SET
@@ -144,6 +158,7 @@ export function openStore(path, username, password) {
 
   return {
     statements,
+    localOwnerId,
     close: () => db.close(),
     createSession: db.transaction((ownerId, token, previousToken) => {
       const now = Date.now();
@@ -152,9 +167,9 @@ export function openStore(path, username, password) {
       statements.insertSession.run(digest(token), ownerId, now + sessionDuration);
       return sessionDuration;
     }).immediate,
-    appendFinding: db.transaction((keyDigest, idempotencyKey, inputDigest, makeFinding) => {
-      const project = statements.mcpProject.get(keyDigest);
-      if (!project) return { error: 'Invalid or revoked project key' };
+    appendFinding: db.transaction((resolveProject, idempotencyKey, inputDigest, makeFinding) => {
+      const project = resolveProject();
+      if (!project) return;
       const { owner_id: ownerId, id: projectId } = project;
       const previous = statements.previousAppend.get(ownerId, projectId, idempotencyKey);
       if (previous) {
