@@ -10,8 +10,8 @@ import type { Finding, Severity, UpdateFindingField } from '../../types';
 import CvssCalculatorModal from './CvssCalculatorModal';
 
 const OPTIONAL_SECTIONS = [
-    { key: 'poc' as const, label: 'Proof of Concept', icon: FlaskConical, iconClass: 'text-purple-400/70', placeholder: 'Step-by-step instructions to reproduce the vulnerability...' },
-    { key: 'requestResponse' as const, label: 'Request / Response', icon: ArrowRightLeft, iconClass: 'text-cyan-400/70', placeholder: 'Raw HTTP request and response samples...' },
+    { key: 'poc' as const, label: 'Proof of Concept', icon: FlaskConical, iconClass: 'text-purple-400/70', placeholder: 'Describe what you observed and the evidence that supports it...' },
+    { key: 'requestResponse' as const, label: 'Request / Response', icon: ArrowRightLeft, iconClass: 'text-cyan-400/70', placeholder: 'Optional: paste the literal HTTP request and response with sensitive values redacted...' },
     { key: 'references' as const, label: 'References', icon: BookOpen, iconClass: 'text-amber-400/70', placeholder: 'OWASP links, vendor advisories, CWE references, related articles...' },
     { key: 'notes' as const, label: 'Notes', icon: StickyNote, iconClass: 'text-zinc-400/70', placeholder: 'Internal notes (not included in final report)...' },
 ];
