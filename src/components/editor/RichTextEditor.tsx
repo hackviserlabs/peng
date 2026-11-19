@@ -1,3 +1,4 @@
+import { sanitizeRichText } from '../../lib/richText';
 import { useEditor, EditorContent } from '@tiptap/react';
 import { BubbleMenu } from '@tiptap/react/menus';
 import { Bold, Italic, Strikethrough, Code, CodeSquare, List, ListOrdered, Link2, Unlink } from 'lucide-react';
@@ -7,7 +8,7 @@ import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { common, createLowlight } from 'lowlight';
-import { useEffect } from 'react';
+import { useEffect, useMemo } from 'react';
 
 const lowlight = createLowlight(common);
 
@@ -30,9 +31,11 @@ interface RichTextEditorProps {
 }
 
 export default function RichTextEditor({ content, placeholder, onChange }: RichTextEditorProps) {
+    const cleanContent = useMemo(() => sanitizeRichText(content), [content]);
     const editor = useEditor({
         extensions: [
             StarterKit.configure({
+                link: false, // configured below
                 codeBlock: false, // replaced by CodeBlockLowlight
             }),
             Image.configure({
@@ -56,11 +59,12 @@ export default function RichTextEditor({ content, placeholder, onChange }: RichT
                 defaultLanguage: 'http',
             }),
         ],
-        content,
+        content: cleanContent,
         onUpdate: ({ editor }) => {
             onChange(editor.getHTML());
         },
         editorProps: {
+            transformPastedHTML: sanitizeRichText,
             attributes: {
                 class:
                     'w-full bg-transparent border-none text-zinc-300 print:text-black text-base leading-relaxed outline-none min-h-[72px] prose prose-invert prose-emerald max-w-none print:prose-p:text-black print:prose-headings:text-black',
@@ -73,7 +77,8 @@ export default function RichTextEditor({ content, placeholder, onChange }: RichT
                         if (file) {
                             const reader = new FileReader();
                             reader.onload = (e) => {
-                                const src = e.target?.result as string;
+                                const src = e.target?.result;
+                                if (view.isDestroyed || typeof src !== 'string') return;
                                 const node = view.state.schema.nodes.image.create({ src });
                                 const transaction = view.state.tr.replaceSelectionWith(node);
                                 view.dispatch(transaction);
@@ -90,9 +95,9 @@ export default function RichTextEditor({ content, placeholder, onChange }: RichT
 
     useEffect(() => {
         if (editor && content !== editor.getHTML()) {
-            editor.commands.setContent(content);
+            if (cleanContent !== editor.getHTML()) editor.commands.setContent(cleanContent, { emitUpdate: false });
         }
-    }, [content, editor]);
+    }, [content, cleanContent, editor]);
 
     return (
         <div className="rich-text-container relative">

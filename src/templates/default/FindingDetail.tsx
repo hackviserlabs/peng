@@ -1,3 +1,4 @@
+import { sanitizeRichText } from '../../lib/richText';
 import type { Finding } from '../../types';
 
 interface FindingDetailProps {
@@ -69,7 +70,7 @@ function ContentSection({ title, html }: { title: string; html: string }) {
     return (
         <div className="report-no-break">
             <h4 className="text-lg font-bold mb-3 text-gray-800">{title}</h4>
-            <div className="prose report-prose max-w-none text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: html }} />
+            <div className="prose report-prose max-w-none text-sm leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeRichText(html) }} />
         </div>
     );
 }

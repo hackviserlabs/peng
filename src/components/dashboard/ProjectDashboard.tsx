@@ -1,29 +1,33 @@
-import { useState, useEffect } from 'react';
+import { useState } from 'react';
 import { Plus, Trash2, FolderOpen, Calendar, Upload, Github } from 'lucide-react';
 import ConfirmModal from '../ui/ConfirmModal';
 import { SEVERITY_COLORS } from '../../constants';
-import type { Project } from '../../types';
-import { getProjectFindings } from '../../lib/db';
+import type { Finding, Project } from '../../types';
 
 interface ProjectDashboardProps {
     projects: Project[];
+    getFindings: (id: string) => Finding[] | undefined;
+    getFindingsError: (id: string) => string | undefined;
+    onRetryFindings: (id: string) => void;
+    busy: boolean;
+    account?: string;
+    signOutDisabled: boolean;
+    onSignOut?: () => void;
     onSelectProject: (id: string) => void;
-    onCreateProject: (name: string) => void;
+    onCreateProject: (name: string) => Promise<void>;
     onDeleteProject: (id: string) => void;
     onImport: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
-interface ProjectFindingCounts {
-    total: number;
-    Critical: number;
-    High: number;
-    Medium: number;
-    Low: number;
-    Info: number;
-}
-
 export default function ProjectDashboard({
     projects,
+    getFindings,
+    getFindingsError,
+    onRetryFindings,
+    busy,
+    account,
+    signOutDisabled,
+    onSignOut,
     onSelectProject,
     onCreateProject,
     onDeleteProject,
@@ -31,40 +35,18 @@ export default function ProjectDashboard({
 }: ProjectDashboardProps) {
     const [newName, setNewName] = useState('');
     const [showCreate, setShowCreate] = useState(false);
-    const [findingCounts, setFindingCounts] = useState<Record<string, ProjectFindingCounts>>({});
     const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
     const pendingProject = projects.find(p => p.id === pendingDeleteId);
 
-    // Load finding counts for all projects
-    useEffect(() => {
-        const loadCounts = async () => {
-            const counts: Record<string, ProjectFindingCounts> = {};
-            for (const project of projects) {
-                try {
-                    const findings = await getProjectFindings(project.id);
-                    const c: ProjectFindingCounts = { total: findings.length, Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
-                    for (const f of findings) c[f.severity] = (c[f.severity] || 0) + 1;
-                    counts[project.id] = c;
-                } catch {
-                    counts[project.id] = { total: 0, Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
-                }
-            }
-            setFindingCounts(counts);
-        };
-        loadCounts();
-    }, [projects]);
-
-    const handleCreate = () => {
+    const handleCreate = async () => {
         const name = newName.trim();
-        if (!name) return;
-        onCreateProject(name);
-        setNewName('');
-        setShowCreate(false);
+        if (!name || busy) return;
+        await onCreateProject(name);
     };
 
     return (
         <>
-            <div className="flex h-screen bg-[#09090b] text-zinc-300 font-sans selection:bg-emerald-500/30">
+            <div className="flex min-h-0 flex-1 bg-[#09090b] text-zinc-300 font-sans selection:bg-emerald-500/30">
                 <div className="flex-1 overflow-y-auto">
                     <div className="max-w-5xl mx-auto px-8 py-16">
 
@@ -81,10 +63,10 @@ export default function ProjectDashboard({
                                 </a>
                                 <label className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-zinc-300 bg-zinc-800/50 hover:bg-zinc-700 rounded-lg transition-colors border border-zinc-700/50 cursor-pointer">
                                     <Upload className="w-4 h-4" /> Import
-                                    <input type="file" accept=".json" onChange={onImport} className="hidden" />
+                                    <input type="file" accept=".json" onChange={onImport} disabled={busy} className="hidden" />
                                 </label>
                                 <button
-                                    onClick={() => setShowCreate(true)}
+                                    onClick={() => setShowCreate(true)} disabled={busy}
                                     className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-black bg-white hover:bg-zinc-200 rounded-lg transition-colors"
                                 >
                                     <Plus className="w-4 h-4" /> New Project
@@ -92,13 +74,25 @@ export default function ProjectDashboard({
                             </div>
                         </div>
 
+                        {account && (
+                            <div className="mb-4 flex items-center justify-between text-sm text-zinc-400">
+                                <span>Connected workspace · {account}</span>
+                                <button onClick={onSignOut} disabled={signOutDisabled}
+                                    className="rounded-md border border-zinc-700 px-3 py-2 text-zinc-200 hover:bg-zinc-800 disabled:opacity-50">
+                                    Sign out
+                                </button>
+                            </div>
+                        )}
+
                         {/* Hero Description */}
                         <div className="mb-10 pb-10 border-b border-zinc-800/60">
                             <p className="text-lg text-zinc-400 mb-2">
                                 Open-source penetration test report writing tool. Write, manage, and export professional pentest reports — fast.
                             </p>
                             <p className="text-sm text-zinc-600 mb-6">
-                                Your data never leaves your browser. No cloud, no servers — everything is stored locally.
+                                {account
+                                    ? 'Projects and findings are stored on the server. Import uploads the selected file to this workspace.'
+                                    : 'Local workspace · Projects and findings are stored in this browser.'}
                             </p>
                             <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                                 {[
@@ -127,7 +121,7 @@ export default function ProjectDashboard({
                                     placeholder="Project name (e.g. Acme Corp Q1 2026 Pentest)"
                                     className="flex-1 bg-transparent border border-zinc-700 rounded-lg px-4 py-2.5 text-sm text-zinc-200 focus:outline-none focus:border-emerald-500/50 transition-colors placeholder-zinc-600"
                                 />
-                                <button onClick={handleCreate} className="px-4 py-2.5 text-sm font-medium text-black bg-emerald-500 hover:bg-emerald-400 rounded-lg transition-colors">Create</button>
+                                <button onClick={handleCreate} disabled={busy} className="px-4 py-2.5 text-sm font-medium text-black bg-emerald-500 hover:bg-emerald-400 rounded-lg transition-colors">Create</button>
                                 <button onClick={() => { setShowCreate(false); setNewName(''); }} className="px-4 py-2.5 text-sm font-medium text-zinc-400 hover:text-white transition-colors">Cancel</button>
                             </div>
                         )}
@@ -141,7 +135,7 @@ export default function ProjectDashboard({
                                 <h2 className="text-xl font-medium text-zinc-300 mb-2">No Projects Yet</h2>
                                 <p className="text-sm mb-6">Create your first pentest project to get started.</p>
                                 <button
-                                    onClick={() => setShowCreate(true)}
+                                    onClick={() => setShowCreate(true)} disabled={busy}
                                     className="flex items-center gap-2 px-5 py-2.5 text-sm font-medium text-black bg-white hover:bg-zinc-200 rounded-lg transition-colors"
                                 >
                                     <Plus className="w-4 h-4" /> New Project
@@ -150,11 +144,14 @@ export default function ProjectDashboard({
                         ) : (
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                                 {projects.map((project) => {
-                                    const counts = findingCounts[project.id];
+                                    const findings = getFindings(project.id) ?? [];
+                                    const counts = { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 };
+                                    for (const finding of findings) counts[finding.severity]++;
+                                    const findingsError = getFindingsError(project.id);
                                     return (
                                         <div
                                             key={project.id}
-                                            onClick={() => onSelectProject(project.id)}
+                                            onClick={() => { if (!busy) onSelectProject(project.id); }}
                                             className="group relative p-5 rounded-xl bg-zinc-900/50 border border-zinc-800 hover:border-zinc-700 hover:bg-zinc-800/30 cursor-pointer transition-all"
                                         >
                                             {/* Delete */}
@@ -162,6 +159,7 @@ export default function ProjectDashboard({
                                                 onClick={(e) => { e.stopPropagation(); setPendingDeleteId(project.id); }}
                                                 className="absolute top-4 right-4 p-1.5 text-zinc-600 hover:text-red-400 hover:bg-red-400/10 rounded-md transition-colors opacity-0 group-hover:opacity-100"
                                                 title="Delete Project"
+                                                disabled={busy}
                                             >
                                                 <Trash2 className="w-4 h-4" />
                                             </button>
@@ -169,8 +167,15 @@ export default function ProjectDashboard({
                                             <h3 className="text-lg font-semibold text-white mb-1 pr-8 truncate">{project.name || 'Untitled Project'}</h3>
                                             {project.clientName && <p className="text-sm text-zinc-400 mb-3 truncate">{project.clientName}</p>}
 
+                                            {findingsError && (
+                                                <button title={findingsError} className="mb-2 text-xs text-red-300 underline"
+                                                    onClick={(event) => { event.stopPropagation(); onRetryFindings(project.id); }}>
+                                                    Retry finding count
+                                                </button>
+                                            )}
+
                                             {/* Severity badges */}
-                                            {counts && counts.total > 0 && (
+                                            {findings.length > 0 && (
                                                 <div className="flex items-center gap-1.5 mb-3">
                                                     {(['Critical', 'High', 'Medium', 'Low', 'Info'] as const).map((sev) =>
                                                         counts[sev] > 0 ? (
@@ -179,7 +184,7 @@ export default function ProjectDashboard({
                                                             </span>
                                                         ) : null
                                                     )}
-                                                    <span className="text-[10px] text-zinc-500 ml-1">{counts.total} findings</span>
+                                                    <span className="text-[10px] text-zinc-500 ml-1">{findings.length} findings</span>
                                                 </div>
                                             )}
 

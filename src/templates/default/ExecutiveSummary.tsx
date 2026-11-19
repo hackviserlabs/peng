@@ -1,3 +1,4 @@
+import { sanitizeRichText } from '../../lib/richText';
 import type { ReportData } from '../reportTypes';
 import type { Severity } from '../../types';
 
@@ -14,7 +15,7 @@ export function ExecutiveSummary({ data }: { data: ReportData }) {
 
             {/* Summary HTML */}
             {project.executiveSummary ? (
-                <div className="prose max-w-none mb-10 text-base leading-relaxed" dangerouslySetInnerHTML={{ __html: project.executiveSummary }} />
+                <div className="prose max-w-none mb-10 text-base leading-relaxed" dangerouslySetInnerHTML={{ __html: sanitizeRichText(project.executiveSummary) }} />
             ) : (
                 <p className="text-gray-400 italic mb-10">No executive summary provided.</p>
             )}
