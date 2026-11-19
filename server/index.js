@@ -19,8 +19,8 @@ if (!BIND_HOST) throw new Error('BIND_HOST must be nonempty');
 process.umask(0o077);
 const backend = createApp({
   databasePath: DATABASE_PATH,
-  adminUsername: ADMIN_USERNAME,
-  adminPassword: ADMIN_PASSWORD,
+  adminUsername: ADMIN_USERNAME || undefined,
+  adminPassword: ADMIN_PASSWORD || undefined,
   cookieSecure: COOKIE_SECURE === 'true',
   appOrigin: APP_ORIGIN,
   deployMode: DEPLOY_MODE,

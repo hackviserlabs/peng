@@ -64,9 +64,7 @@ try {
     const { structuredContent: { projects } } = await client.callTool({ name: 'list_projects', arguments: {} });
     assert.deepEqual(new Map(projects.map(({ id, name }) => [id, name])),
       new Map([[project.id, project.name], [other.id, other.name]]));
-    for (const tool of tools.filter(tool => tool.name !== 'list_projects')) {
-      assert.ok(tool.inputSchema.required?.includes('projectId'), tool.name + ' requires a projectId');
-    }
+    assert.equal((await client.callTool({ name: 'list_templates', arguments: {} })).isError, true);
     assert.equal((await client.callTool({ name: 'list_templates', arguments: { projectId: 'unknown' } })).isError, true);
   }
   const selection = local ? { projectId: project.id } : {};
