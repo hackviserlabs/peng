@@ -4,6 +4,14 @@ import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
 
 const sessionDuration = 7 * 24 * 60 * 60 * 1000;
+const weakBootstrapPasswords = new Set([
+  '123456789012345',
+  '1234567890123456',
+  'correcthorsebatterystaple',
+  'password123456789',
+  'qwertyuiopasdfgh',
+  'replace-with-a-strong-password',
+]);
 
 export function digest(value) {
   return createHash('sha256').update(value).digest('hex');
@@ -68,6 +76,12 @@ export function openStore(path, username, password) {
       if (db.prepare('SELECT 1 FROM users LIMIT 1').get()) return;
       if (!username || !password) {
         throw new Error('Set ADMIN_USERNAME and ADMIN_PASSWORD to initialize an empty database');
+      }
+      const trimmed = password.trim();
+      const normalized = trimmed.toLowerCase();
+      if ([...trimmed].length < 15 || normalized === username.trim().toLowerCase()
+          || /^(.{1,8})\1+$/su.test(normalized) || weakBootstrapPasswords.has(normalized)) {
+        throw new Error('ADMIN_PASSWORD must be at least 15 characters and avoid common passwords or placeholders. Generate a random password.');
       }
       const salt = randomBytes(16).toString('hex');
       const hash = scryptSync(password, salt, 64).toString('hex');
