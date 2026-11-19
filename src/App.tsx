@@ -5,6 +5,7 @@ import Editor from './components/editor/Editor';
 import ProjectSettings from './components/settings/ProjectSettings';
 import ProjectDashboard from './components/dashboard/ProjectDashboard';
 import ReportPreview from './components/report/ReportPreview';
+import ReportFindingSelector from './components/report/ReportFindingSelector';
 import TemplateBrowser from './components/templates/TemplateBrowser';
 import { Workspace } from './lib/workspace';
 import { parseProjectImport } from './lib/projectImport';
@@ -15,6 +16,9 @@ import { createDefaultFinding, createDefaultProject } from './types';
 import type { FindingTemplate } from './constants';
 
 type ActiveView = 'editor' | 'settings';
+type ReportView =
+  | { projectId: string; step: 'select' }
+  | { projectId: string; step: 'preview'; findingIds: ReadonlySet<string> };
 
 export default function App() {
   return serverMode ? <ConnectedWorkspace>{(connection) => <WorkspaceView connection={connection} />}</ConnectedWorkspace>
@@ -36,7 +40,8 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [activeView, setActiveView] = useState<ActiveView>('editor');
-  const [showReport, setShowReport] = useState(false);
+  const [report, setReport] = useState<ReportView | null>(null);
+  const activeReport = report?.projectId === activeProjectId ? report : null;
   const [showTemplateBrowser, setShowTemplateBrowser] = useState(false);
 
   useEffect(() => {
@@ -77,14 +82,14 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       // Cmd+T / Ctrl+T → Toggle template browser
-      if ((e.metaKey || e.ctrlKey) && e.key === 't' && findingList?.ready && !expired) {
+      if ((e.metaKey || e.ctrlKey) && e.key === 't' && findingList?.ready && !expired && !activeReport) {
         e.preventDefault();
         setShowTemplateBrowser((prev) => !prev);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [findingList?.ready, expired]);
+  }, [findingList?.ready, expired, activeReport]);
 
   const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
 
@@ -158,6 +163,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
   // --- Project handlers ---
 
   const handleSelectProject = (id: string) => {
+    setReport(null);
     setActiveProjectId(id);
     setSelectedFindingId(null);
     setSearchTerm('');
@@ -169,7 +175,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
     setSelectedFindingId(null);
     setPendingDeleteFindingId(null);
     setShowTemplateBrowser(false);
-    setShowReport(false);
+    setReport(null);
     setSearchTerm('');
   };
 
@@ -292,7 +298,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
           </div>
         )}
       </div>
-      <div className={`flex min-h-0 flex-1 ${showReport ? 'print:hidden' : ''}`}>
+      <div className={`flex min-h-0 flex-1 ${activeReport?.step === 'preview' ? 'print:hidden' : ''}`}>
         <Sidebar
           projectName={activeProject.name}
           findings={filteredFindings}
@@ -307,7 +313,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
           onOpenSettings={() => setActiveView('settings')}
           onExport={() => findingList?.ready && exportData()}
           onBackToProjects={handleBackToProjects}
-          onGenerateReport={() => findingList?.ready && setShowReport(true)}
+          onGenerateReport={() => findingList?.ready && setReport({ projectId: activeProjectId, step: 'select' })}
           onDeleteFinding={handleDeleteFinding}
           onDuplicateFinding={handleDuplicateFinding}
         />
@@ -331,11 +337,19 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
           />
         )}
       </div>
-      {showReport && (
+      {activeReport?.step === 'select' && (
+        <ReportFindingSelector
+          key={activeProjectId}
+          findings={findings}
+          onCancel={() => setReport(null)}
+          onPreview={(findingIds) => setReport({ projectId: activeProjectId, step: 'preview', findingIds })}
+        />
+      )}
+      {activeReport?.step === 'preview' && (
         <ReportPreview
           project={activeProject}
-          findings={findings}
-          onClose={() => setShowReport(false)}
+          findings={findings.filter((finding) => activeReport.findingIds.has(finding.id))}
+          onClose={() => setReport(null)}
         />
       )}
       {showTemplateBrowser && (

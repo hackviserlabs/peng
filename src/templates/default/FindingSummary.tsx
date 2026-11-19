@@ -43,7 +43,7 @@ export function FindingSummary({ data }: { data: ReportData }) {
             </table>
 
             {data.findings.length === 0 && (
-                <p className="text-gray-400 italic mt-6">No findings recorded.</p>
+                <p className="text-gray-600 italic mt-6">No findings included in this report.</p>
             )}
         </div>
     );
