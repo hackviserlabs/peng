@@ -12,6 +12,7 @@
 <p align="center">
   <a href="#features">Features</a> •
   <a href="#getting-started">Getting Started</a> •
+  <a href="#docker-deployment">Docker Deployment</a> •
   <a href="#usage">Usage</a> •
   <a href="#tech-stack">Tech Stack</a> •
   <a href="#contributing">Contributing</a> •
@@ -22,7 +23,7 @@
 
 ## Why peng?
 
-Most pentest report tools are either expensive SaaS platforms or clunky desktop apps. **peng** is a free, open-source alternative that runs entirely in your browser. Your data never touches a server — everything stays local in your browser's storage.
+Most pentest report tools are either expensive SaaS platforms or clunky desktop apps. **peng** is a free, open-source alternative. The default static build stores reports in your browser. The Docker deployment stores them in a self-hosted SQLite database.
 
 ## Features
 
@@ -32,22 +33,21 @@ Most pentest report tools are either expensive SaaS platforms or clunky desktop 
 - **Multi-Project Support** — Manage multiple assessments independently
 - **CVSS Scoring** — Built-in CVSS v3.1 score input with automatic severity mapping
 - **Metadata Fields** — Endpoint, parameter, affected host, port, CVE, CWE per finding
-- **Offline-First** — No cloud, no accounts, no servers. 100% client-side with IndexedDB storage
+- **Offline Mode** — The static build uses IndexedDB and works without an account
 - **Dark Theme** — Professional dark UI designed for long assessment sessions
 
 ## Getting Started
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+
-- npm or pnpm
+- [Node.js](https://nodejs.org/) 24 LTS and npm
 
 ### Installation
 
 ```bash
 git clone https://github.com/hackviserr/peng.git
 cd peng
-npm install
+npm ci
 npm run dev
 ```
 
@@ -61,6 +61,23 @@ npm run preview
 ```
 
 The production build will be in the `dist/` directory. You can deploy it to any static hosting provider (Vercel, Netlify, GitHub Pages, etc.).
+
+## Docker Deployment
+
+Use Docker with the Compose plugin and a checkout that includes `server/`. Copy `.env.example` to `.env` and set `ADMIN_USERNAME` and `ADMIN_PASSWORD`. Then run:
+
+```bash
+docker compose up --build -d --wait
+docker compose port web 8080
+```
+
+Open the displayed loopback address over HTTP and sign in with the admin credentials. The default `PENG_PORT=0` picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed address. The only published service is nginx, which serves the frontend and forwards `/api/`, `/mcp` (Streamable HTTP), and the `/healthz` readiness check on the same origin. nginx accepts request bodies up to 32 MiB.
+
+Keep `COOKIE_SECURE=false` for local HTTP. For HTTPS, point your TLS reverse proxy at a fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `COOKIE_SECURE=true` in `.env` and rerun `docker compose up -d` to apply it.
+
+The server image installs dependencies from `server/package-lock.json` and runs `npm start` on Node 24. The server binds to `0.0.0.0:3000` inside Compose and stores SQLite at `/data/peng.sqlite`.
+
+Compose uses the worktree directory name as the project name by default. Choose a distinct `COMPOSE_PROJECT_NAME` in each `.env` if directory names collide. Each project has its own `peng-data` volume. `docker compose down` preserves it, while `docker compose down -v` deletes it and the reports it holds.
 
 ## Usage
 
