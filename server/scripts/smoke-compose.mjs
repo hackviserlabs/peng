@@ -52,13 +52,13 @@ try {
     await request(path + '/keys/unused', 'DELETE', undefined, 404);
     await request('/mcp', 'GET', undefined, 403, 'http://untrusted.example');
   } else {
-    const { key } = await (await request(path + '/keys', 'POST', { name: 'Smoke' }, 201)).json();
+    const { key } = await (await request(path + '/keys', 'POST', { name: 'Smoke', access: 'manage' }, 201)).json();
     headers.Authorization = 'Bearer ' + key;
   }
   await client.connect(new StreamableHTTPClientTransport(new URL('/mcp', origin), { requestInit: { headers } }));
   const { tools } = await client.listTools();
   assert.deepEqual(tools.map(tool => tool.name).sort(), [
-    'append_finding', 'get_template', ...(local ? ['list_projects'] : []), 'list_templates',
+    'append_finding', 'append_findings', 'get_finding', 'get_template', 'list_findings', ...(local ? ['list_projects'] : []), 'list_templates', 'update_finding',
   ]);
   if (local) {
     const { structuredContent: { projects } } = await client.callTool({ name: 'list_projects', arguments: {} });
@@ -71,7 +71,7 @@ try {
   const guidance = await client.callTool({ name: 'list_templates', arguments: selection });
   assert.equal(guidance.structuredContent.templateInstructions, project.templateInstructions);
   assert.equal(guidance.structuredContent.catalogAvailable, true);
-  assert.deepEqual(guidance.structuredContent.templates, []);
+  assert.ok(guidance.structuredContent.templates.length > 0);
   const search = await client.callTool({ name: 'list_templates', arguments: { ...selection, query: 'network', limit: 1 } });
   const [template] = search.structuredContent.templates;
   const detail = await client.callTool({ name: 'get_template', arguments: { ...selection, id: template.id } });
@@ -82,6 +82,17 @@ try {
   const findings = await (await request(path + '/findings')).json();
   assert.deepEqual(findings.map(f => f.title), ['Smoke finding']);
   assert.deepEqual(await (await request(otherPath + '/findings')).json(), []);
+  const id = findings[0].id;
+  const patch = { status: 'False Positive', triageNotes: 'Reviewed by the report owner.' };
+  const edit = await client.callTool({ name: 'update_finding', arguments: { ...selection, id, patch } });
+  assert.ok(!edit.isError);
+  const list = await client.callTool({ name: 'list_findings', arguments: { ...selection, status: patch.status } });
+  assert.equal(list.structuredContent.findings[0].id, id);
+  const read = await client.callTool({ name: 'get_finding', arguments: { ...selection, id } });
+  assert.ok(!read.isError);
+  const [updated] = await (await request(path + '/findings')).json();
+  assert.equal(updated.status, patch.status);
+  assert.equal(updated.triageNotes, patch.triageNotes);
   if (!local) {
     const [issued] = await (await request(path + '/keys')).json();
     await request(path + '/keys/' + issued.id, 'DELETE', undefined, 204);
