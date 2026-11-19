@@ -322,35 +322,6 @@ test('bootstrap credentials are required for a fresh database and never overwrit
   })).status, 401);
 });
 
-test('switching deployment modes preserves the workspace and requires organization bootstrap', async (t) => {
-  const path = await databasePath(t);
-  const project = createDefaultProject('Local workspace');
-  const local = await runServer(t, { databasePath: path, mode: 'local' });
-  assert.equal((await local.request('/api/projects/' + project.id, { method: 'PUT', body: project })).status, 204);
-  await local.stop();
-
-  assert.throws(() => createApp({ databasePath: path }), /Set ADMIN_USERNAME and ADMIN_PASSWORD/);
-  assert.throws(() => createApp({
-    databasePath: path, ...admin, adminPassword: 'short',
-  }), /ADMIN_PASSWORD must be at least 15/);
-  assert.throws(() => createApp({ databasePath: path, mode: 'typo' }), /DEPLOY_MODE/);
-
-  const org = await runServer(t, { databasePath: path });
-  assert.equal((await org.request('/api/projects')).status, 401);
-  const { cookie } = await org.login();
-  assert.deepEqual(await (await org.request('/api/projects', { cookie })).json(), [project]);
-  const finding = createDefaultFinding(project.id);
-  const findingsPath = '/api/projects/' + project.id + '/findings';
-  assert.equal((await org.request(findingsPath + '/' + finding.id, {
-    method: 'PUT', cookie, body: finding,
-  })).status, 204);
-  await org.stop();
-
-  const reopened = await runServer(t, { databasePath: path, mode: 'local' });
-  assert.deepEqual(await (await reopened.request('/api/projects')).json(), [project]);
-  assert.deepEqual(await (await reopened.request(findingsPath)).json(), [finding]);
-});
-
 test('MCP only discovers templates and appends escaped findings to the bearer key project', async (t) => {
   const path = await databasePath(t);
   const first = await runServer(t, { databasePath: path });

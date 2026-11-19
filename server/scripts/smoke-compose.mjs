@@ -37,7 +37,7 @@ if (local) {
   const username = process.env.ADMIN_USERNAME;
   const login = await request('/api/login', 'POST', { username, password: process.env.ADMIN_PASSWORD });
   cookie = login.headers.get('set-cookie').split(';')[0];
-  assert.deepEqual(await (await request('/api/session')).json(), { username });
+  assert.deepEqual(await (await request('/api/session')).json(), { username, mode });
 }
 
 const client = new Client({ name: 'compose-smoke', version: '1' });
