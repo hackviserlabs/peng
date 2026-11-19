@@ -3,6 +3,7 @@ import { Settings, Filter, FileOutput, BookOpen } from 'lucide-react';
 import SidebarHeader from './SidebarHeader';
 import FindingList from './FindingList';
 import type { Finding, Severity, FindingStatus } from '../../types';
+import { FINDING_STATUSES, findingStatusLabel } from '../../types';
 import { ALL_TEMPLATES } from '../../data/templates';
 
 type SortMode = 'newest' | 'severity';
@@ -112,13 +113,13 @@ export default function Sidebar({
                         </button>
                     ))}
                     <span className="w-px h-4 bg-zinc-800 self-center mx-0.5" />
-                    {(['All', 'Open', 'Fixed', 'Accepted Risk'] as const).map((st) => (
+                    {(['All', ...FINDING_STATUSES] as const).map((st) => (
                         <button
                             key={st}
                             onClick={() => setFilterStatus(st)}
                             className={`text-[10px] font-medium px-2 py-0.5 rounded transition-colors ${filterStatus === st ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'}`}
                         >
-                            {st}
+                            {st === 'All' ? 'All statuses' : findingStatusLabel(st)}
                         </button>
                     ))}
                 </div>

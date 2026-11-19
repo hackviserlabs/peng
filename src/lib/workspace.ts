@@ -140,7 +140,7 @@ export class Workspace {
         this.changeFinding(finding.projectId, finding.id, finding);
     }
 
-    updateFinding(projectId: string, id: string, field: keyof Finding, value: string) {
+    updateFinding<K extends keyof Finding>(projectId: string, id: string, field: K, value: Finding[K]) {
         const finding = this.getFindings(projectId)?.findings.find(item => item.id === id);
         if (finding) this.changeFinding(projectId, id, { ...finding, [field]: value });
     }

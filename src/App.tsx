@@ -98,6 +98,9 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
         ...base,
         title: template.title,
         severity: template.severity,
+        templateId: template.id,
+        category: template.category,
+        tags: [...template.tags],
         description: template.description,
         impact: template.impact,
         remediation: template.remediation,
@@ -146,7 +149,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
     setSelectedFindingId(duplicate.id);
   };
 
-  const handleUpdateFinding = (field: keyof Finding, value: string) => {
+  const handleUpdateFinding = <K extends keyof Finding,>(field: K, value: Finding[K]) => {
     if (activeProjectId && selectedFindingId) {
       workspace.updateFinding(activeProjectId, selectedFindingId, field, value);
     }
@@ -289,7 +292,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
           </div>
         )}
       </div>
-      <div className="flex min-h-0 flex-1">
+      <div className={`flex min-h-0 flex-1 ${showReport ? 'print:hidden' : ''}`}>
         <Sidebar
           projectName={activeProject.name}
           findings={filteredFindings}
