@@ -401,7 +401,7 @@ test('local MCP selects projects by ID and organization bootstrap preserves the 
   const modern = await connectMcp(t, local.origin, undefined, { pin: '2026-07-28' });
   const call = (name, args = {}) => modern.callTool({ name, arguments: args });
   assert.deepEqual((await legacy.listTools()).tools.map(({ name }) => name).sort(),
-    ['append_finding', 'get_template', 'list_projects', 'list_templates']);
+    ['append_finding', 'append_findings', 'get_finding', 'get_template', 'list_findings', 'list_projects', 'list_templates', 'update_finding']);
   assert.deepEqual((await call('list_projects')).structuredContent, { projects: [] });
   assert.equal((await call('list_templates')).isError, true);
 
@@ -542,11 +542,11 @@ test('MCP only discovers templates and appends escaped findings to the bearer ke
   const modern = await connectMcp(t, origin, replacement, { pin: '2026-07-28' });
   const otherClient = await connectMcp(t, origin, otherKey);
   assert.deepEqual((await modern.listTools()).tools.map(({ name }) => name).sort(),
-    ['append_finding', 'get_template', 'list_templates']);
+    ['append_finding', 'append_findings', 'get_template', 'list_templates']);
   for (const client of [legacy, modern]) {
     const guidance = await client.callTool({ name: 'list_templates', arguments: {} });
     assert.equal(guidance.structuredContent.templateInstructions, project.templateInstructions);
-    assert.deepEqual(guidance.structuredContent.templates, []);
+    assert.ok(guidance.structuredContent.templates.length > 0);
     assert.match(guidance.structuredContent.reportFormat, /Description.*\nEvidence.*\nImpact.*\nRemediation/);
     assert.match(guidance.content[0].text, /^Project guidance\nUse plain-language titles\.\n\nDefault finding format/);
   }
@@ -587,7 +587,7 @@ test('MCP only discovers templates and appends escaped findings to the bearer ke
   assert.equal(saved.title, args.title);
   assert.equal(saved.projectId, project.id);
   assert.equal(saved.id, one.findingId);
-  assert.equal(saved.status, 'Open');
+  assert.equal(saved.status, 'New');
   assert.equal(saved.severity, 'Medium');
   for (const field of fields) {
     const escaped = '&lt;b&gt;literal&lt;/b&gt; &amp; &quot;quoted&quot;';
