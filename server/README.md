@@ -91,8 +91,8 @@ Each server admits up to eight validly formed login attempts per connection peer
 | `GET /api/projects/:id/findings` | Array of findings for the project. |
 | `PUT /api/projects/:id/findings/:findingId` | Upserts one full app `Finding`. Returns `204`. |
 | `DELETE /api/projects/:id/findings/:findingId` | Deletes one finding. Returns `204`. |
-| `GET /api/projects/:id/keys` | Array of `{id,name,createdAt}` records with ISO 8601 timestamps. |
-| `POST /api/projects/:id/keys` | JSON `{name}`. Returns `201 {key}`. Copy the bearer key at creation. SQLite stores its SHA-256 digest. |
+| `GET /api/projects/:id/keys` | Array of `{id,name,createdAt,access}` records with ISO 8601 timestamps. |
+| `POST /api/projects/:id/keys` | JSON `{name,access?}`. Choose `append` (default) for submission or `manage` for reading and triage as well. Returns `201 {key}`. Copy the bearer key at creation. SQLite stores its SHA-256 digest. |
 | `DELETE /api/projects/:id/keys/:keyId` | Revokes a key immediately. Returns `204`. |
 
 Project and finding IDs in PUT bodies must match the path. The browser API preserves rich text fields used by the app editor.
@@ -101,12 +101,19 @@ Project and finding IDs in PUT bodies must match the path. The browser API prese
 
 The endpoint supports modern per-request MCP and legacy stateless Streamable HTTP. In organization mode, configure the client for Streamable HTTP at the deployment's `/mcp` URL with `Authorization: Bearer <key>` on every request. The key selects a single project.
 
-In local mode, use the same endpoint without credentials. Call `list_projects` with `{}` to get `{projects:[{id,name}]}` for the shared workspace. Pass one of those IDs as `projectId` to any of the three report tools below. You can omit `projectId` when there is exactly one project. With multiple projects, an explicit ID is required even when names differ. An unknown ID or empty workspace returns a tool error.
+In local mode, use the same endpoint without credentials. Call `list_projects` with `{}` to get project IDs, names and finding counts for the shared workspace. Pass one of those IDs as `projectId` to project-specific tools. You can omit `projectId` when there is exactly one project. With multiple projects, an explicit ID is required even when names differ. An unknown ID or empty workspace returns a tool error.
 
 Local MCP validates any supplied Origin and rejects browser requests marked as coming from another origin. Browser MCP mutations must send the exact same-origin `Origin` header. Native clients can omit Origin and send MCP POST requests as `application/json`.
 
-- **`list_templates`** with `{}` returns the project's `templateInstructions` first, followed by a readable `reportFormat` and an empty `templates` array. For optional catalog search, pass a nonempty `query` of up to 120 characters and a `limit` from 1 to 20 (default 8). Search returns matching `id`, `title`, `category`, and `severity` summaries and `hasMore`. Both modes return `catalogAvailable`.
-- **`get_template`** takes `{id}` from a search result and returns the template's category, tags, and suggested `title`, `severity`, and `cwe` defaults. Adapt those defaults to the verified finding. The default report format works with any project, including when the catalog is unavailable.
-- **`append_finding`** requires `title` and a caller-generated `idempotencyKey`. It accepts an optional `severity` (defaults to `Medium`) and plain-text `description`, `poc`, `requestResponse`, `impact`, `remediation`, `notes`, `references`, `url`, `method`, `parameter`, `affectedHost`, `port`, `cve`, `cwe`, `cvss`, and `cvssVector`. It creates an `Open` finding in the selected project and returns `{findingId,created}`. Separate paragraphs with blank lines. The backend escapes the text for the HTML renderer and preserves indentation and line breaks in request and response samples.
+### Submission and triage
+
+1. Call `list_templates` to read project instructions, the report format and the first page of the catalog. Use `limit` and `offset` to browse further, or narrow the results with `category` and `query`. Call `get_template` with a result ID for defaults, remediation guidance and references.
+2. Submit one report card with `append_finding` or a group with `append_findings`. Give each card its own stable `idempotencyKey`. Check every batch result before retrying. Use `templateId` to associate a card with its source template. Supply explicit values for the fields you need to override.
+3. To resume in a later session, call `list_findings` with a text query or a severity/status filter. It returns summaries and IDs. Use `limit`, `offset` and `hasMore` to page through matches, then call `get_finding` with the ID to read the full record.
+4. Use `update_finding` with `id` and a partial `patch`. For example, `{"id":"<finding-id>","patch":{"status":"False Positive","triageNotes":"Confirmed during owner review."}}`. In local mode include `projectId` when multiple projects exist. In organization mode the project comes from the key. Reading and updating require a key issued with `manage` access. Existing submission keys retain their original permissions.
+
+New cards start with status `New`. Existing `Open` records keep that status. Other choices are `Verified`, `False Positive`, `Duplicate`, `Accepted Risk` and `Fixed`. Use `confidence` for certainty independently of severity. Record multiple affected endpoints in `targets` and evidence paths or URLs in `evidence`. The reporting service stores those references as text.
+
+The MCP tool schemas expose accepted fields, enum values and length limits. Invalid values and unknown project, template or finding IDs return errors. Split large batches to fit the HTTP request limit.
 
 Retry a submission with the same idempotency key and finding content. A retry returns the original finding ID and `created: false`, even after a restart, a key rotation, or deletion of that finding. Reusing a key with different content returns a tool error. Idempotency keys are scoped to each project and are removed with the project.

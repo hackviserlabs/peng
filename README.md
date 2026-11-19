@@ -90,8 +90,8 @@ Apply `.env` changes with `docker compose up -d --wait`. Run `docker compose por
 
 Both modes use Streamable HTTP.
 
-- **Local.** Connect to `http://<printed-address>/mcp` without a key. Call `list_projects` to find the project's ID, then pass it as `projectId` to `list_templates`, `get_template`, and `append_finding`.
-- **Organization.** Create a named key under **MCP access** in project settings and copy it while it is visible. Use the displayed endpoint and send `Authorization: Bearer <key>`. The key selects the project, so start with `list_templates` using `{}`. Revoke the key when the agent's work is done.
+- **Local.** Connect to `http://<printed-address>/mcp` without a key. Call `list_projects` to find the project's ID, then pass it as `projectId` to project-specific tools.
+- **Organization.** Create a named key under **MCP access** in project settings and copy it while it is visible. Use the displayed endpoint and send `Authorization: Bearer <key>`. The key selects the project, so start with `list_templates` using `{}`. Choose append access for submission, or manage access when the agent also needs to read and triage existing cards. Revoke the key when the agent's work is done.
 
 ### Ports and HTTPS
 
