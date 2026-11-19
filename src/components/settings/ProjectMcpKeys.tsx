@@ -2,12 +2,23 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { api, errorMessage, projectPath } from '../../lib/api';
 import ConfirmModal from '../ui/ConfirmModal';
 
+type KeyAccess = 'append' | 'manage';
+
 interface ProjectKey {
     id: string;
     name: string;
     createdAt: string;
+    access: KeyAccess;
 }
 
+const accessLabels: Record<KeyAccess, string> = {
+    append: 'Append findings',
+    manage: 'Manage findings',
+};
+const accessDescriptions: Record<KeyAccess, string> = {
+    append: 'Read templates and add findings to this project.',
+    manage: 'Read templates and add, read, triage, and update findings in this project.',
+};
 const button = 'rounded-lg border border-zinc-700 px-3 py-2 text-sm text-zinc-200 hover:bg-zinc-800 disabled:opacity-50';
 const input = 'min-w-0 rounded-lg border border-zinc-800 bg-zinc-900/50 px-3 py-2 text-sm text-zinc-200 focus:border-emerald-500 focus:outline-none';
 
@@ -16,7 +27,8 @@ export default function ProjectMcpKeys({ projectId }: { projectId: string }) {
     const [keys, setKeys] = useState<ProjectKey[]>();
     const [reload, setReload] = useState(0);
     const [name, setName] = useState('');
-    const [issuedKey, setIssuedKey] = useState<string>();
+    const [access, setAccess] = useState<KeyAccess>('append');
+    const [issuedKey, setIssuedKey] = useState<{ value: string; access: KeyAccess }>();
     const [pendingRevoke, setPendingRevoke] = useState<ProjectKey>();
     const [busy, setBusy] = useState(false);
     const [loadError, setLoadError] = useState<string>();
@@ -54,10 +66,11 @@ export default function ProjectMcpKeys({ projectId }: { projectId: string }) {
         const keyName = name.trim();
         if (!keyName) return;
         void run(async () => {
-            const { key } = await api<{ key: string }>(path, 'Creating MCP key', 'POST', { name: keyName }, true);
-            setIssuedKey(key);
+            const { key } = await api<{ key: string }>(path, 'Creating MCP key', 'POST', { name: keyName, access }, true);
+            setIssuedKey({ value: key, access });
             setCopyStatus(undefined);
             setName('');
+            setAccess('append');
         });
     };
 
@@ -98,21 +111,34 @@ export default function ProjectMcpKeys({ projectId }: { projectId: string }) {
                 </button>
             </div>
 
-            <form onSubmit={issue} className="flex flex-wrap items-end gap-2">
-                <label className="flex min-w-40 flex-1 flex-col gap-1 text-sm text-zinc-400">
-                    Key name
-                    <input required maxLength={120} className={input} value={name} onChange={event => setName(event.target.value)} />
-                </label>
-                <button className={button} disabled={busy || !name.trim()}>Create key</button>
+            <form onSubmit={issue} className="space-y-2">
+                <div className="flex flex-wrap items-end gap-2">
+                    <label className="flex min-w-40 flex-1 flex-col gap-1 text-sm text-zinc-400">
+                        Key name
+                        <input required maxLength={120} className={input} value={name} onChange={event => setName(event.target.value)} />
+                    </label>
+                    <label className="flex flex-col gap-1 text-sm text-zinc-400">
+                        Access
+                        <select className={input} value={access} aria-describedby="mcp-key-access-description"
+                            onChange={event => setAccess(event.target.value === 'manage' ? 'manage' : 'append')}>
+                            <option value="append">{accessLabels.append}</option>
+                            <option value="manage">{accessLabels.manage}</option>
+                        </select>
+                    </label>
+                    <button className={button} disabled={busy || !name.trim()}>Create key</button>
+                </div>
+                <p id="mcp-key-access-description" className="text-sm text-zinc-400">{accessDescriptions[access]}</p>
             </form>
 
             {issuedKey && (
                 <div className="space-y-2 rounded-lg border border-emerald-800 bg-emerald-950/40 p-4">
-                    <p className="text-sm text-emerald-100">Copy your new key now. It is shown once.</p>
+                    <p className="text-sm text-emerald-100">
+                        Copy your new “{accessLabels[issuedKey.access]}” key now. It is shown once.
+                    </p>
                     <div className="flex flex-wrap gap-2">
                         <input aria-label="New MCP key" className={`${input} flex-1 font-mono`} readOnly
-                            value={issuedKey} onFocus={event => event.target.select()} />
-                        <button type="button" className={button} onClick={() => void copy(issuedKey, 'Key copied.')}>Copy key</button>
+                            value={issuedKey.value} onFocus={event => event.target.select()} />
+                        <button type="button" className={button} onClick={() => void copy(issuedKey.value, 'Key copied.')}>Copy key</button>
                         <button type="button" className={button} onClick={() => setIssuedKey(undefined)}>Hide key</button>
                     </div>
                 </div>
@@ -133,6 +159,7 @@ export default function ProjectMcpKeys({ projectId }: { projectId: string }) {
                         <li key={key.id} className="flex items-center justify-between gap-3 py-3">
                             <div className="min-w-0">
                                 <p className="break-words text-sm text-zinc-100">{key.name}</p>
+                                <p className="text-xs text-zinc-400">{accessLabels[key.access ?? 'append']}</p>
                                 <p className="text-xs text-zinc-500">Created {new Date(key.createdAt).toLocaleString()}</p>
                             </div>
                             <button type="button" className={button} disabled={busy} onClick={() => setPendingRevoke(key)}>

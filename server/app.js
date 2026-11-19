@@ -206,7 +206,7 @@ export function createApp({
     if (!parsed.success) return invalidBody(res);
     const key = `peng_${newToken()}`;
     const { changes } = statements.insertKey.run(
-      randomUUID(), parsed.data.name, new Date().toISOString(), digest(key), req.user.id, req.params.id,
+      randomUUID(), parsed.data.name, new Date().toISOString(), digest(key), parsed.data.access, req.user.id, req.params.id,
     );
     if (!changes) return notFound(res);
     res.status(201).json({ key });
@@ -240,7 +240,10 @@ export function createApp({
       res.set('WWW-Authenticate', 'Bearer realm="peng"');
       return unauthorized(res);
     }
-    req.auth = { token, clientId: key.key_id, scopes: ['findings:append', 'templates:read'], extra: { keyDigest } };
+    const access = key.access === 'manage' ? 'manage' : 'append';
+    const scopes = ['findings:append', 'templates:read'];
+    if (access === 'manage') scopes.push('findings:read', 'findings:update');
+    req.auth = { token, clientId: key.key_id, scopes, extra: { keyDigest, access } };
     next();
   }, mcp.handle);
 

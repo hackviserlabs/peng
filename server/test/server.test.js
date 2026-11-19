@@ -257,6 +257,8 @@ test('owner-scoped project, finding and key APIs persist across restarts', async
     assert.equal(db.prepare('SELECT digest FROM mcp_keys').get().digest, digest(key));
     assert.equal(db.prepare('SELECT digest FROM sessions').get().digest, digest(cookie.split('=')[1]));
     assert.notEqual(db.prepare('SELECT password_hash FROM users').get().password_hash, admin.adminPassword);
+    // Simulate the schema from before key access was introduced.
+    db.exec('ALTER TABLE mcp_keys DROP COLUMN access');
   } finally {
     db.close();
   }
@@ -272,9 +274,18 @@ test('owner-scoped project, finding and key APIs persist across restarts', async
   assert.deepEqual(findings.find(({ id }) => id === original.id), original);
   assert.equal(findings.length, 2);
   const [keyInfo] = await (await request(projectPath + '/keys', { cookie })).json();
-  assert.deepEqual(Object.keys(keyInfo).sort(), ['createdAt', 'id', 'name']);
+  assert.deepEqual(Object.keys(keyInfo).sort(), ['access', 'createdAt', 'id', 'name']);
   assert.equal(keyInfo.name, 'Integration');
+  assert.equal(keyInfo.access, 'append');
   assert.ok(Date.parse(keyInfo.createdAt));
+  const migrated = new Database(path, { readonly: true });
+  try {
+    assert.deepEqual(migrated.prepare('SELECT digest, access FROM mcp_keys WHERE id = ?').get(keyInfo.id), {
+      digest: digest(key), access: 'append',
+    });
+  } finally {
+    migrated.close();
+  }
 
   const other = (await second.login('other')).cookie;
   assert.deepEqual(await (await request('/api/projects', { cookie: other })).json(), []);
@@ -299,6 +310,118 @@ test('owner-scoped project, finding and key APIs persist across restarts', async
   assert.equal((await request(projectPath, { method: 'DELETE', cookie })).status, 204);
   assert.equal((await request(projectPath + '/findings', { cookie })).status, 404);
   assert.equal((await request('/mcp', { headers: { Authorization: `Bearer ${key}` } })).status, 401);
+});
+
+test('project key management requires the project owner and an explicit manage grant', async (t) => {
+  const path = await databasePath(t);
+  const first = await runServer(t, { databasePath: path });
+  const { request } = first;
+  const { cookie } = await first.login();
+  const project = createDefaultProject('Access review');
+  const projectPath = '/api/projects/' + project.id;
+  const keysPath = projectPath + '/keys';
+  assert.equal((await request(projectPath, { method: 'PUT', cookie, body: project })).status, 204);
+
+  for (const access of ['Manage', 'admin', '', null, ['manage']]) {
+    assert.equal((await request(keysPath, { method: 'POST', cookie, body: { name: 'Invalid', access } })).status, 400);
+  }
+  await addKey(request, projectPath, cookie, 'Legacy client');
+  const explicitAppend = await request(keysPath, {
+    method: 'POST', cookie, body: { name: 'Explicit append', access: 'append' },
+  });
+  assert.equal(explicitAppend.status, 201);
+  const manage = await request(keysPath, {
+    method: 'POST', cookie, body: { name: 'Finding reviewer', access: 'manage' },
+  });
+  assert.equal(manage.status, 201);
+  const issued = await manage.json();
+  assert.deepEqual(Object.keys(issued), ['key']);
+  const headers = { Authorization: `Bearer ${issued.key}` };
+  const finding = createDefaultFinding(project.id);
+  for (const [requestPath, options] of [
+    [projectPath + '/findings', {}],
+    [projectPath + '/findings/' + finding.id, { method: 'PUT', body: finding }],
+    [keysPath, {}],
+    [keysPath, { method: 'POST', body: { name: 'Escalation', access: 'manage' } }],
+  ]) {
+    assert.equal((await request(requestPath, { ...options, headers })).status, 401);
+  }
+  await first.stop();
+
+  const db = new Database(path);
+  try {
+    db.prepare(`
+      INSERT INTO users (username, salt, password_hash)
+      SELECT 'other', salt, password_hash FROM users WHERE username = 'admin'
+    `).run();
+  } finally {
+    db.close();
+  }
+  const second = await runServer(t, { databasePath: path });
+  const other = (await second.login('other')).cookie;
+  assert.equal((await second.request(keysPath, {
+    method: 'POST', cookie: other, body: { name: 'Escalation', access: 'manage' },
+  })).status, 404);
+  const owner = (await second.login()).cookie;
+  const keys = await (await second.request(keysPath, { cookie: owner })).json();
+  assert.deepEqual(Object.fromEntries(keys.map(({ name, access }) => [name, access])), {
+    'Legacy client': 'append',
+    'Explicit append': 'append',
+    'Finding reviewer': 'manage',
+  });
+  for (const key of keys) assert.deepEqual(Object.keys(key).sort(), ['access', 'createdAt', 'id', 'name']);
+});
+
+test('the finding API validates triage metadata and preserves it when older clients save', async (t) => {
+  const { request, login } = await runServer(t);
+  const { cookie } = await login();
+  const project = createDefaultProject('Triage review');
+  const projectPath = '/api/projects/' + project.id;
+  assert.equal((await request(projectPath, { method: 'PUT', cookie, body: project })).status, 204);
+
+  const legacyFinding = { ...createDefaultFinding(project.id), description: `<p>${'&amp;'.repeat(5_000)}</p>` };
+  const findingPath = projectPath + '/findings/' + legacyFinding.id;
+  const triage = {
+    confidence: 'high',
+    triageNotes: 't'.repeat(24_000),
+    evidence: ['reports/review.txt', 'file:///reports/trace.txt'],
+    targets: [
+      { url: 'https://example.test' },
+      { url: 'https://example.test/search', method: 'GET', parameter: 'q', host: 'example.test', port: '443' },
+    ],
+    templateId: 'review-template',
+    category: 'Review',
+    tags: Array(100).fill('x'.repeat(2_048)),
+  };
+  const save = (body) => request(findingPath, { method: 'PUT', cookie, body });
+  const load = async () => (await (await request(projectPath + '/findings', { cookie })).json())[0];
+  for (const status of ['New', 'Open', 'Verified', 'False Positive', 'Duplicate', 'Accepted Risk', 'Fixed']) {
+    const finding = { ...legacyFinding, ...triage, status };
+    assert.equal((await save(finding)).status, 204);
+    assert.deepEqual(await load(), finding);
+  }
+  const edited = { ...legacyFinding, status: 'Fixed', title: 'Edited by the old client' };
+  delete edited.cvssVector;
+  assert.equal((await save(edited)).status, 204);
+  const expected = { ...edited, ...triage, cvssVector: legacyFinding.cvssVector };
+  assert.deepEqual(await load(), expected);
+  for (const invalid of [
+    { status: 'Pending' },
+    { confidence: 'High' },
+    { triageNotes: 't'.repeat(24_001) },
+    { evidence: [{ path: 'reports/review.txt' }] },
+    { evidence: Array(101).fill('reports/review.txt') },
+    { targets: [{ host: 'example.test' }] },
+    { targets: [{ url: 'https://example.test', unexpected: true }] },
+    { targets: Array(101).fill({ url: 'https://example.test' }) },
+    { templateId: 'x'.repeat(2_049) },
+    { tags: Array(101).fill('review') },
+  ]) {
+    assert.equal((await save({ ...edited, ...invalid })).status, 400);
+  }
+  assert.deepEqual(await load(), expected);
+  assert.equal((await save({ ...edited, evidence: [], targets: [], tags: [], triageNotes: '' })).status, 204);
+  assert.deepEqual(await load(), { ...expected, evidence: [], targets: [], tags: [], triageNotes: '' });
 });
 
 test('bootstrap credentials are required for a fresh database and never overwrite an existing account', async (t) => {
