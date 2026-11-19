@@ -1,15 +1,25 @@
-import { ALL_TEMPLATES as templates } from '../src/data/templates/index.ts';
-import { createDefaultFinding } from '../src/types/index.ts';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import {
+  appendDigest, appendInput, findingConfidence, findingDetails, findingPatch, findingStatus,
+  newFinding, renderFindingFields, templateId,
+} from './mcp-findings.js';
+import { catalogSummaries, templateDetails, templateFindingFields, templates, templatesById } from './mcp-templates.js';
 import { id as projectIdSchema, severity } from './schemas.js';
-import { digest } from './store.js';
 
-const templatesById = new Map(templates.map((template) => [template.id, template]));
 const templateSummary = z.object({ id: z.string(), title: z.string(), category: z.string(), severity });
+const findingSummary = z.object({
+  id: z.string(), title: z.string(), severity, status: findingStatus, createdAt: z.string(),
+  confidence: findingConfidence.optional(), templateId: z.string().optional(), category: z.string().optional(),
+});
+const findingDetail = findingDetails.extend(findingSummary.shape);
+const appendOutcome = z.object({ findingId: z.string(), created: z.boolean() });
+const offsetInput = z.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
+const pageInfo = { hasMore: z.boolean(), nextOffset: offsetInput.optional() };
+const queryInput = z.string().trim().min(1).max(120).optional();
 const readOnly = { readOnlyHint: true, openWorldHint: false };
-const guidanceFirst = 'Call list_templates with {} first to read project guidance and the default finding format. Search for a template only if it helps with the report.';
+const appendAnnotations = { destructiveHint: false, idempotentHint: true, openWorldHint: false };
 const reportFormat = [
   'Title and severity — Name the finding and rate the observed risk.',
   'Description — Summarize what was observed and identify the affected asset.',
@@ -18,40 +28,6 @@ const reportFormat = [
   'Remediation — Give concrete fixes and a way to verify them.',
   'References — Put relevant links on separate lines. Omit fields that do not apply.',
 ].join('\n');
-const contentFields = ['description', 'poc', 'requestResponse', 'impact', 'remediation', 'notes', 'references'];
-const text = z.string().max(24_000).default('');
-const metadata = z.string().max(2_048).default('');
-const appendInput = z.strictObject({
-  idempotencyKey: z.string().trim().min(1).max(200),
-  title: z.string().trim().min(1).max(240),
-  severity: severity.default('Medium'),
-  description: text,
-  poc: text,
-  requestResponse: text,
-  impact: text,
-  remediation: text,
-  notes: text,
-  references: text,
-  url: metadata,
-  method: metadata,
-  parameter: metadata,
-  affectedHost: metadata,
-  port: metadata,
-  cve: metadata,
-  cwe: metadata,
-  cvss: metadata,
-  cvssVector: metadata,
-});
-
-const htmlEntities = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
-
-function renderText(value, field) {
-  if (!value.trim()) return '';
-  const escaped = value.replace(/\r\n?/g, '\n').replace(/[&<>"']/g, (char) => htmlEntities[char]);
-  if (field === 'requestResponse') return `<pre><code>${escaped}</code></pre>`;
-  return escaped.trim().split(/\n(?:[^\S\n]*\n)+/)
-    .map((paragraph) => `<p>${paragraph.replaceAll('\n', '<br>')}</p>`).join('');
-}
 
 function result(data, text = JSON.stringify(data)) {
   return { structuredContent: data, content: [{ type: 'text', text }] };
@@ -61,21 +37,32 @@ function failure(text) {
   return { isError: true, content: [{ type: 'text', text }] };
 }
 
+function pagination(hasMore, offset, limit) {
+  return { hasMore, ...(hasMore ? { nextOffset: offset + limit } : {}) };
+}
+
 export function createMcpEndpoint(store, { local }) {
   const maxRequestBodySize = 256 * 1024;
   const { statements, workspaceOwnerId } = store;
   const projectInput = local ? { projectId: projectIdSchema.optional() } : {};
-  const listTemplatesExample = local ? '{projectId} from list_projects' : '{}';
+  const guidanceInput = local ? '{projectId} from list_projects' : '{}';
   const instructions = local
-    ? 'Call list_projects to discover the workspace projects. Use a project ID from that list in report tools. Then call list_templates with that projectId to read project guidance and the default finding format.'
-    : guidanceFirst;
+    ? 'Call list_projects to discover the workspace projects. Use a project ID from that list in report tools. Call list_templates with that projectId for project guidance and the default finding format.'
+    : 'Call list_templates with {} for project guidance and the default finding format. Browse or search the catalog when a template helps with the report.';
 
   const handler = createMcpHandler(({ authInfo }) => {
     const server = new McpServer({ name: 'peng', version: '1.0.0' }, { instructions });
+    const keyDigest = authInfo?.extra?.keyDigest;
+    const canManage = local || authInfo?.extra?.access === 'manage';
 
-    function selectProject(projectId) {
+    function selectProject(projectId, manage = false) {
       if (!local) {
-        return statements.mcpProject.get(authInfo.extra.keyDigest) ?? { error: 'Invalid or revoked project key' };
+        const project = keyDigest && statements.mcpProject.get(keyDigest);
+        if (!project) return { error: 'Invalid or revoked project key' };
+        if (manage && (!canManage || project.access !== 'manage')) {
+          return { error: 'This tool requires a manage project key' };
+        }
+        return project;
       }
       if (projectId !== undefined) {
         return statements.project.get(workspaceOwnerId, projectId) ?? { error: 'Unknown project ID' };
@@ -88,61 +75,61 @@ export function createMcpEndpoint(store, { local }) {
 
     if (local) {
       server.registerTool('list_projects', {
-        description: 'List local workspace projects and their unique IDs for use in report tools.',
+        description: 'List local workspace projects, their IDs, and their finding counts.',
         inputSchema: z.strictObject({}),
-        outputSchema: z.object({ projects: z.array(z.object({ id: z.string(), name: z.string() })) }),
+        outputSchema: z.object({
+          projects: z.array(z.object({ id: z.string(), name: z.string(), findingCount: z.number().int() })),
+        }),
         annotations: readOnly,
-      }, () => {
-        const projects = statements.projects.all(workspaceOwnerId).map(({ data }) => {
-          const { id, name } = JSON.parse(data);
-          return { id, name };
-        });
-        return result({ projects });
-      });
+      }, () => result({ projects: statements.mcpProjects.all(workspaceOwnerId) }));
     }
 
     server.registerTool('list_templates', {
-      description: `Use ${listTemplatesExample} for project instructions and the default finding format. Supply a query for an optional, bounded search of template summaries.`,
+      description: `Use ${guidanceInput} for project guidance, the default finding format, and the first page of the catalog. Use limit and offset to browse, or filter by category or query.`,
       inputSchema: z.strictObject({
         ...projectInput,
-        query: z.string().trim().min(1).max(120).optional(),
-        limit: z.number().int().min(1).max(20).default(8),
+        query: queryInput,
+        category: z.string().trim().min(1).max(120).optional(),
+        limit: z.number().int().min(1).max(20).optional(),
+        offset: offsetInput.optional(),
       }),
       outputSchema: z.object({
         templateInstructions: z.string().optional(),
+        hasGuidance: z.boolean().optional(),
         reportFormat: z.string().optional(),
         templates: z.array(templateSummary),
         catalogAvailable: z.boolean(),
-        hasMore: z.boolean().optional(),
+        ...pageInfo,
       }),
       annotations: readOnly,
-    }, ({ projectId, query, limit }) => {
+    }, ({ projectId, query, category, limit, offset }) => {
       const project = selectProject(projectId);
       if (project.error) return failure(project.error);
-      const catalogAvailable = templates.length > 0;
-      if (query === undefined) {
-        const templateInstructions = project.template_instructions ?? '';
-        return result({ templateInstructions, reportFormat, templates: [], catalogAvailable },
-          `Project guidance\n${templateInstructions || 'No project-specific instructions.'}\n\nDefault finding format\n${reportFormat}`);
+      const matches = catalogSummaries(query, category);
+      const start = offset ?? 0;
+      const pageSize = limit ?? 8;
+      const page = {
+        templates: matches.slice(start, start + pageSize),
+        catalogAvailable: templates.length > 0,
+        ...pagination(matches.length > start + pageSize, start, pageSize),
+      };
+      if (query !== undefined || category !== undefined || limit !== undefined || offset !== undefined) {
+        return result(page);
       }
 
-      const terms = query.toLowerCase().split(/\s+/);
-      const matches = [];
-      for (const { id, title, category, severity, cwe, tags } of templates) {
-        const searchable = [id, title, category, severity, cwe, ...tags].join(' ').toLowerCase();
-        if (!terms.every((term) => searchable.includes(term))) continue;
-        matches.push({ id, title, category, severity });
-        if (matches.length > limit) break;
-      }
-      return result({ templates: matches.slice(0, limit), catalogAvailable, hasMore: matches.length > limit });
+      const templateInstructions = project.template_instructions ?? '';
+      const hasGuidance = templateInstructions.trim().length > 0;
+      return result({ templateInstructions, hasGuidance, reportFormat, ...page },
+        `Project guidance\n${hasGuidance ? templateInstructions : 'No project-specific instructions.'}\n\nDefault finding format\n${reportFormat}\n\nTemplate catalog\n${JSON.stringify(page)}`);
     });
 
     server.registerTool('get_template', {
-      description: 'Get suggested title, severity, and CWE defaults for a template ID from list_templates. Adapt them to the verified finding.',
-      inputSchema: z.strictObject({ ...projectInput, id: z.string().trim().min(1).max(120) }),
+      description: 'Get suggested defaults, a plain-text remediation hint, and reference URLs for a template ID from list_templates.',
+      inputSchema: z.strictObject({ ...projectInput, id: templateId }),
       outputSchema: z.object({
         id: z.string(), category: z.string(), tags: z.array(z.string()),
         defaults: z.object({ title: z.string(), severity, cwe: z.string().optional() }),
+        remediation_hint: z.string(), references: z.array(z.string()),
       }),
       annotations: readOnly,
     }, ({ projectId, id }) => {
@@ -151,23 +138,109 @@ export function createMcpEndpoint(store, { local }) {
       if (!templates.length) return failure('Template catalog unavailable. Use the default finding format from list_templates.');
       const template = templatesById.get(id);
       if (!template) return failure('Unknown template ID');
-      const { title, severity, category, cwe, tags } = template;
-      return result({ id, category, tags, defaults: { title, severity, ...(cwe ? { cwe } : {}) } });
+      return result(templateDetails(template));
     });
 
-    server.registerTool('append_finding', {
-      description: `Append a new finding to ${local ? 'a local workspace project' : 'this key’s project'}. Read project guidance first via list_templates with ${listTemplatesExample}. Submit plain text, separate paragraphs with blank lines, and reuse the same idempotencyKey when retrying.`,
-      inputSchema: local ? appendInput.extend(projectInput) : appendInput,
-      outputSchema: z.object({ findingId: z.string(), created: z.boolean() }),
-      annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, ({ projectId, idempotencyKey, ...values }) => {
-      const outcome = store.appendFinding(() => selectProject(projectId), idempotencyKey, digest(JSON.stringify(values)), (id) => {
-        const finding = { ...createDefaultFinding(id), ...values };
-        for (const field of contentFields) finding[field] = renderText(finding[field], field);
-        return finding;
+    function appendFinding(projectId, { idempotencyKey, ...values }) {
+      const template = templatesById.get(values.templateId);
+      if (values.templateId !== undefined && !template) return { error: 'Unknown template ID' };
+      return store.appendFinding(() => selectProject(projectId), idempotencyKey, appendDigest(values), (id) => {
+        const inherited = template ? templateFindingFields(template) : {};
+        return newFinding(id, { ...inherited, ...values });
       });
+    }
+
+    server.registerTool('append_finding', {
+      description: `Append a report finding. Read project guidance first via list_templates with ${guidanceInput}. Supply a title or templateId. Explicit fields override template defaults. Submit plain text and separate paragraphs with blank lines. Reuse the same idempotencyKey when retrying.`,
+      inputSchema: appendInput.safeExtend(projectInput),
+      outputSchema: appendOutcome,
+      annotations: appendAnnotations,
+    }, ({ projectId, ...values }) => {
+      const outcome = appendFinding(projectId, values);
       return outcome.error ? failure(outcome.error) : result(outcome);
     });
+
+    server.registerTool('append_findings', {
+      description: 'Append up to 25 report findings to one project. Each item takes the append_finding fields and its own idempotencyKey. Results are in input order and use zero-based indices.',
+      inputSchema: z.strictObject({
+        ...projectInput,
+        findings: z.array(z.unknown()).min(1).max(25),
+      }),
+      outputSchema: z.object({
+        results: z.array(z.union([
+          appendOutcome.extend({ index: z.number().int() }),
+          z.object({ index: z.number().int(), error: z.string() }),
+        ])),
+      }),
+      annotations: appendAnnotations,
+    }, ({ projectId, findings }) => {
+      const project = selectProject(projectId);
+      if (project.error) return failure(project.error);
+      const results = findings.map((finding, index) => {
+        const parsed = appendInput.safeParse(finding);
+        if (!parsed.success) return { index, error: z.prettifyError(parsed.error) };
+        return { index, ...appendFinding(project.id, parsed.data) };
+      });
+      return result({ results });
+    });
+
+    if (canManage) {
+      server.registerTool('list_findings', {
+        description: 'Page through compact finding summaries. Filter by severity, status, or a case-insensitive substring of finding identifiers, titles, and report metadata.',
+        inputSchema: z.strictObject({
+          ...projectInput,
+          query: queryInput,
+          severity: severity.optional(),
+          status: findingStatus.optional(),
+          limit: z.number().int().min(1).max(50).default(20),
+          offset: offsetInput.default(0),
+        }),
+        outputSchema: z.object({ findings: z.array(findingSummary), ...pageInfo }),
+        annotations: readOnly,
+      }, ({ projectId, query, severity, status, limit, offset }) => {
+        const project = selectProject(projectId, true);
+        if (project.error) return failure(project.error);
+        const rows = statements.mcpFindingSummaries.all({
+          ownerId: project.owner_id, projectId: project.id, query: query ?? null,
+          severity: severity ?? null, status: status ?? null, limit: limit + 1, offset,
+        });
+        const findings = rows.slice(0, limit).map(({ confidence, templateId, category, ...summary }) => ({
+          ...summary,
+          ...(confidence !== null ? { confidence } : {}),
+          ...(templateId !== null ? { templateId } : {}),
+          ...(category !== null ? { category } : {}),
+        }));
+        return result({ findings, ...pagination(rows.length > limit, offset, limit) });
+      });
+
+      server.registerTool('get_finding', {
+        description: 'Get a full report finding by ID, including its stored rich-text report fields.',
+        inputSchema: z.strictObject({ ...projectInput, id: projectIdSchema }),
+        outputSchema: z.object({ finding: findingDetail }),
+        annotations: readOnly,
+      }, ({ projectId, id }) => {
+        const project = selectProject(projectId, true);
+        if (project.error) return failure(project.error);
+        const row = statements.mcpFinding.get(project.owner_id, project.id, id);
+        return row ? result({ finding: JSON.parse(row.data) }) : failure('Unknown finding ID');
+      });
+
+      server.registerTool('update_finding', {
+        description: 'Patch the supplied report fields of an existing finding. Supply plain text for report fields. An empty string or array clears the corresponding text or list.',
+        inputSchema: z.strictObject({ ...projectInput, id: projectIdSchema, patch: findingPatch }),
+        outputSchema: z.object({ findingId: z.string(), updated: z.literal(true) }),
+        annotations: { idempotentHint: true, openWorldHint: false },
+      }, ({ projectId, id, patch }) => {
+        const project = selectProject(projectId, true);
+        if (project.error) return failure(project.error);
+        if (patch.templateId !== undefined && !templatesById.has(patch.templateId)) return failure('Unknown template ID');
+        const { changes } = statements.mcpUpdateFinding.run({
+          ownerId: project.owner_id, projectId: project.id, findingId: id,
+          patch: JSON.stringify(renderFindingFields(patch)),
+        });
+        return changes ? result({ findingId: id, updated: true }) : failure('Unknown finding ID');
+      });
+    }
 
     return server;
   }, { maxRequestBodySize, maxSubscriptions: 0 });

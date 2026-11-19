@@ -2,6 +2,7 @@ import { createHash, randomBytes, scryptSync } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import { prepareMcpReportStatements } from './mcp-report-statements.js';
 
 const sessionDuration = 7 * 24 * 60 * 60 * 1000;
 const weakBootstrapPasswords = new Set([
@@ -118,6 +119,7 @@ export function openStore(path, { local, username, password }) {
   }
 
   const statements = {
+    ...prepareMcpReportStatements(db),
     health: db.prepare('SELECT 1'),
     user: db.prepare("SELECT * FROM users WHERE username = ? AND username <> ''"),
     session: db.prepare(`
