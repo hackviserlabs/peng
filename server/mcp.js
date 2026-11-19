@@ -3,7 +3,7 @@ import { createDefaultFinding } from '../src/types/index.ts';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { severity } from './schemas.js';
+import { id as projectIdSchema, severity } from './schemas.js';
 import { digest } from './store.js';
 
 const templatesById = new Map(templates.map((template) => [template.id, template]));
@@ -64,12 +64,33 @@ function failure(text) {
 export function createMcpEndpoint(store) {
   const maxRequestBodySize = 256 * 1024;
   const handler = createMcpHandler(({ authInfo }) => {
-    const { keyDigest } = authInfo.extra;
-    const server = new McpServer({ name: 'peng', version: '1.0.0' }, { instructions: guidanceFirst });
+    const { localOwnerId, statements } = store;
+    const local = localOwnerId !== undefined;
+    const projectInput = local ? { projectId: projectIdSchema } : {};
+    const getProject = local
+      ? (projectId) => statements.project.get(localOwnerId, projectId)
+      : () => statements.mcpProject.get(authInfo.extra.keyDigest);
+    const missingProject = local ? 'Unknown project ID. Call list_projects to discover project IDs.' : 'Invalid or revoked project key';
+    const instructions = local
+      ? 'Call list_projects first and select a project. Call list_templates with its projectId to read project guidance and the default finding format. Pass that projectId to the other tools.'
+      : guidanceFirst;
+    const server = new McpServer({ name: 'peng', version: '1.0.0' }, { instructions });
+
+    if (local) {
+      server.registerTool('list_projects', {
+        description: 'List project IDs and names. Select a projectId before calling the other tools.',
+        inputSchema: z.strictObject({}),
+        outputSchema: z.object({ projects: z.array(z.object({ id: projectIdSchema, name: z.string() })) }),
+        annotations: readOnly,
+      }, () => result({ projects: statements.projectSummaries.all(localOwnerId) }));
+    }
 
     server.registerTool('list_templates', {
-      description: 'Start here with {} for project instructions and the default finding format. Supply a query for an optional, bounded search of template summaries.',
+      description: local
+        ? 'Pass the selected projectId for project instructions and the default finding format. Supply a query for an optional, bounded template search.'
+        : 'Start here with {} for project instructions and the default finding format. Supply a query for an optional, bounded search of template summaries.',
       inputSchema: z.strictObject({
+        ...projectInput,
         query: z.string().trim().min(1).max(120).optional(),
         limit: z.number().int().min(1).max(20).default(8),
       }),
@@ -81,9 +102,9 @@ export function createMcpEndpoint(store) {
         hasMore: z.boolean().optional(),
       }),
       annotations: readOnly,
-    }, ({ query, limit }) => {
-      const project = store.statements.mcpProject.get(keyDigest);
-      if (!project) return failure('Invalid or revoked project key');
+    }, ({ projectId, query, limit }) => {
+      const project = getProject(projectId);
+      if (!project) return failure(missingProject);
       const catalogAvailable = templates.length > 0;
       if (query === undefined) {
         const templateInstructions = project.template_instructions ?? '';
@@ -104,14 +125,14 @@ export function createMcpEndpoint(store) {
 
     server.registerTool('get_template', {
       description: 'Get suggested title, severity, and CWE defaults for a template ID from list_templates. Adapt them to the verified finding.',
-      inputSchema: z.strictObject({ id: z.string().trim().min(1).max(120) }),
+      inputSchema: z.strictObject({ ...projectInput, id: z.string().trim().min(1).max(120) }),
       outputSchema: z.object({
         id: z.string(), category: z.string(), tags: z.array(z.string()),
         defaults: z.object({ title: z.string(), severity, cwe: z.string().optional() }),
       }),
       annotations: readOnly,
-    }, ({ id }) => {
-      if (!store.statements.mcpProject.get(keyDigest)) return failure('Invalid or revoked project key');
+    }, ({ projectId, id }) => {
+      if (!getProject(projectId)) return failure(missingProject);
       if (!templates.length) return failure('Template catalog unavailable. Use the default finding format from list_templates.');
       const template = templatesById.get(id);
       if (!template) return failure('Unknown template ID');
@@ -120,16 +141,19 @@ export function createMcpEndpoint(store) {
     });
 
     server.registerTool('append_finding', {
-      description: 'Append a new finding to this key’s project. Read project guidance first via list_templates with {}. Submit plain text, separate paragraphs with blank lines, and reuse the same idempotencyKey when retrying.',
-      inputSchema: appendInput,
+      description: local
+        ? 'Append a finding to the selected projectId. Read project guidance first via list_templates. Submit plain text, separate paragraphs with blank lines, and reuse the same idempotencyKey when retrying.'
+        : 'Append a new finding to this key’s project. Read project guidance first via list_templates with {}. Submit plain text, separate paragraphs with blank lines, and reuse the same idempotencyKey when retrying.',
+      inputSchema: appendInput.extend(projectInput),
       outputSchema: z.object({ findingId: z.string(), created: z.boolean() }),
       annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    }, ({ idempotencyKey, ...values }) => {
-      const outcome = store.appendFinding(keyDigest, idempotencyKey, digest(JSON.stringify(values)), (projectId) => {
-        const finding = { ...createDefaultFinding(projectId), ...values };
+    }, ({ projectId, idempotencyKey, ...values }) => {
+      const outcome = store.appendFinding(() => getProject(projectId), idempotencyKey, digest(JSON.stringify(values)), (id) => {
+        const finding = { ...createDefaultFinding(id), ...values };
         for (const field of contentFields) finding[field] = renderText(finding[field], field);
         return finding;
       });
+      if (!outcome) return failure(missingProject);
       return outcome.error ? failure(outcome.error) : result(outcome);
     });
 

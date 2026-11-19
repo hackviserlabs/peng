@@ -20,9 +20,11 @@ services:
     init: true
     environment:
       PORT: "3000"
+      BIND_HOST: 0.0.0.0
       DATABASE_PATH: /data/peng.sqlite
-      ADMIN_USERNAME: ${ADMIN_USERNAME:?Set ADMIN_USERNAME in .env}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set ADMIN_PASSWORD in .env}
+      DEPLOY_MODE: ${DEPLOY_MODE-organization}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
       APP_ORIGIN: ${APP_ORIGIN:-}
       COOKIE_SECURE: "${COOKIE_SECURE:-false}"
     volumes:
