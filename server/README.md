@@ -26,7 +26,7 @@ Run `npm test` from `server/` to exercise the API and both MCP protocol modes. T
 
 ## Docker and nginx
 
-Install production dependencies with `npm ci --omit=dev` in `server/` and start with `npm start`. The Compose image built from `server/` supports project guidance, the default report format, and finding submission. To enable catalog search in a custom image, also include `src/data/templates/` at its repository-relative path. Keep the backend port on the private Docker network and expose nginx to clients.
+The Compose image includes the same finding defaults and template catalog as the editor. When building a custom image, preserve the repository-relative paths of `server/`, `src/types/`, and `src/data/templates/`. Keep the backend port on the private Docker network and expose nginx to clients.
 
 Serve the frontend and proxy the API and MCP on the same nginx origin. With an upstream Docker service named `backend`, the following locations can go in the frontend's nginx server block. Set `APP_ORIGIN` to the public HTTPS origin and keep `COOKIE_SECURE=true`.
 

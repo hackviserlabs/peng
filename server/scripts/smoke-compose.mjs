@@ -28,6 +28,12 @@ try {
   await client.connect(new StreamableHTTPClientTransport(new URL('/mcp', origin), { requestInit: { headers } }));
   const guidance = await client.callTool({ name: 'list_templates', arguments: {} });
   assert.equal(guidance.structuredContent.templateInstructions, project.templateInstructions);
+  assert.equal(guidance.structuredContent.catalogAvailable, true);
+  assert.deepEqual(guidance.structuredContent.templates, []);
+  const search = await client.callTool({ name: 'list_templates', arguments: { query: 'network', limit: 1 } });
+  const [template] = search.structuredContent.templates;
+  const detail = await client.callTool({ name: 'get_template', arguments: { id: template.id } });
+  assert.equal(detail.structuredContent.defaults.title, template.title);
   const submission = { name: 'append_finding', arguments: { title: 'Smoke finding', idempotencyKey: 'smoke' } };
   assert.equal((await client.callTool(submission)).structuredContent.created, true);
   assert.equal((await client.callTool(submission)).structuredContent.created, false);

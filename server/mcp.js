@@ -1,14 +1,11 @@
-import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { ALL_TEMPLATES as templates } from '../src/data/templates/index.ts';
+import { createDefaultFinding } from '../src/types/index.ts';
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import { severity } from './schemas.js';
 import { digest } from './store.js';
 
-// The server-only Docker build can report findings without the frontend catalog.
-const catalogPath = new URL('../src/data/templates/index.ts', import.meta.url);
-const templates = existsSync(catalogPath) ? (await import(catalogPath.href)).ALL_TEMPLATES : [];
 const templatesById = new Map(templates.map((template) => [template.id, template]));
 const templateSummary = z.object({ id: z.string(), title: z.string(), category: z.string(), severity });
 const readOnly = { readOnlyHint: true, openWorldHint: false };
@@ -129,7 +126,7 @@ export function createMcpEndpoint(store) {
       annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false },
     }, ({ idempotencyKey, ...values }) => {
       const outcome = store.appendFinding(keyDigest, idempotencyKey, digest(JSON.stringify(values)), (projectId) => {
-        const finding = { id: randomUUID(), projectId, status: 'Open', createdAt: new Date().toISOString(), ...values };
+        const finding = { ...createDefaultFinding(projectId), ...values };
         for (const field of contentFields) finding[field] = renderText(finding[field], field);
         return finding;
       });
