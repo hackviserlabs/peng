@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { scryptSync } from 'node:crypto';
 import { once } from 'node:events';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { request as httpRequest } from 'node:http';
@@ -10,9 +11,10 @@ import Database from 'better-sqlite3';
 import { ALL_TEMPLATES } from '../../src/data/templates/index.ts';
 import { createDefaultFinding, createDefaultProject } from '../../src/types/index.ts';
 import { createApp } from '../app.js';
+import { createLoginLimiter } from '../login-limiter.js';
 import { digest } from '../store.js';
 
-const admin = { adminUsername: 'admin', adminPassword: 'test password' };
+const admin = { adminUsername: 'admin', adminPassword: 'test fixture password only' };
 
 async function runServer(t, options = {}) {
   const backend = createApp({ databasePath: ':memory:', cookieSecure: false, ...admin, ...options });
@@ -41,10 +43,10 @@ async function runServer(t, options = {}) {
     });
   }
 
-  async function login(username = admin.adminUsername) {
+  async function login(username = admin.adminUsername, password = admin.adminPassword) {
     const response = await request('/api/login', {
       method: 'POST',
-      body: { username, password: admin.adminPassword },
+      body: { username, password },
     });
     assert.equal(response.status, 200);
     assert.deepEqual(await response.json(), { username });
@@ -111,8 +113,74 @@ test('health, session cookie, login CSRF, rotation and logout', async (t) => {
   })).status, 403);
   const logout = await request('/api/logout', { method: 'POST', cookie: renewedCookie });
   assert.equal(logout.status, 204);
-  assert.match(logout.headers.get('set-cookie'), /^peng_session=;/);
+  assert.equal(logout.headers.get('set-cookie').split(';')[0], `${renewedCookie.split('=')[0]}=`);
   assert.equal((await request('/api/session', { cookie: renewedCookie })).status, 401);
+});
+
+test('login limits attempts across usernames and returns Retry-After without changing sessions', async (t) => {
+  const { request, login } = await runServer(t);
+  const { cookie } = await login();
+  for (let attempt = 0; attempt < 7; attempt++) {
+    const rejected = await request('/api/login', {
+      method: 'POST', body: { username: attempt === 0 ? admin.adminUsername : `unknown-${attempt}`, password: 'wrong' },
+    });
+    assert.equal(rejected.status, 401);
+    assert.deepEqual(await rejected.json(), { error: 'Unauthorized' });
+  }
+  const limited = await request('/api/login', {
+    method: 'POST', cookie, body: { username: admin.adminUsername, password: admin.adminPassword },
+  });
+  assert.equal(limited.status, 429);
+  const retryAfter = Number(limited.headers.get('retry-after'));
+  assert.ok(Number.isInteger(retryAfter) && retryAfter >= 1 && retryAfter <= 60);
+  assert.equal(limited.headers.get('set-cookie'), null);
+  assert.equal((await request('/api/session', { cookie })).status, 200);
+});
+
+test('login limiter caps concurrent work and has a global budget that expires', () => {
+  let now = 0;
+  const limiter = createLoginLimiter(() => now);
+  assert.equal(limiter.acquire('peer-a'), 0);
+  assert.equal(limiter.acquire('peer-b'), 0);
+  assert.equal(limiter.acquire('peer-c'), 1);
+  limiter.release();
+  assert.equal(limiter.acquire('peer-c'), 0);
+  limiter.release();
+  limiter.release();
+
+  for (let i = 3; i < 30; i++) {
+    assert.equal(limiter.acquire(`peer-${i}`), 0);
+    limiter.release();
+  }
+  assert.equal(limiter.acquire('new-peer'), 60);
+  now = 59_999;
+  assert.equal(limiter.acquire('new-peer'), 1);
+  now = 60_000;
+  assert.equal(limiter.acquire('new-peer'), 0);
+  assert.equal(limiter.acquire('another-peer'), 0);
+  now = 120_000;
+  assert.equal(limiter.acquire('new-peer'), 1);
+  limiter.release();
+  assert.equal(limiter.acquire('new-peer'), 0);
+  limiter.release();
+  limiter.release();
+});
+
+test('local servers on different ports can log in and out with a shared browser cookie jar', async (t) => {
+  const path = await databasePath(t);
+  const first = await runServer(t, { databasePath: path });
+  const second = await runServer(t, { databasePath: path });
+  const { cookie } = await first.login();
+  assert.match(cookie, /^peng_session_[a-f0-9]{16}=/);
+  assert.equal((await second.request('/api/session', { cookie })).status, 401);
+  const { cookie: secondCookie } = await second.login();
+  assert.notEqual(cookie.split('=')[0], secondCookie.split('=')[0]);
+  const headers = { cookie: `${cookie}; ${secondCookie}` };
+  assert.equal((await first.request('/api/session', headers)).status, 200);
+  assert.equal((await second.request('/api/session', headers)).status, 200);
+  assert.equal((await second.request('/api/logout', { ...headers, method: 'POST' })).status, 204);
+  assert.equal((await second.request('/api/session', headers)).status, 401);
+  assert.equal((await first.request('/api/session', headers)).status, 200);
 });
 
 test('configured public HTTPS origin works behind a proxy that preserves Host', async (t) => {
@@ -154,8 +222,9 @@ test('owner-scoped project, finding and key APIs persist across restarts', async
   delete original.cvssVector;
   const another = createDefaultFinding(project.id);
   const findingPath = projectPath + '/findings/' + original.id;
-  const { cookie, setCookie } = await first.login();
-  assert.doesNotMatch(setCookie, /; Secure/);
+  const session = await first.login();
+  let { cookie } = session;
+  assert.doesNotMatch(session.setCookie, /; Secure/);
   assert.equal((await first.request(projectPath, { method: 'PUT', cookie, body: project })).status, 204);
   const olderProject = { ...project };
   delete olderProject.templateInstructions;
@@ -190,6 +259,7 @@ test('owner-scoped project, finding and key APIs persist across restarts', async
     databasePath: path, adminUsername: undefined, adminPassword: undefined,
   });
   const { request } = second;
+  ({ cookie } = await second.login());
   assert.deepEqual(await (await request('/api/session', { cookie })).json(), { username: 'admin' });
   assert.deepEqual(await (await request('/api/projects', { cookie })).json(), [project]);
   const findings = await (await request(projectPath + '/findings', { cookie })).json();
@@ -227,11 +297,26 @@ test('owner-scoped project, finding and key APIs persist across restarts', async
 
 test('bootstrap credentials are required for a fresh database and never overwrite an existing account', async (t) => {
   assert.throws(() => createApp({ databasePath: ':memory:' }), /initialize an empty database/);
+  for (const adminPassword of ['short', '               ', 'adminadminadmin', 'replace-with-a-strong-password', '🌱'.repeat(8)]) {
+    assert.throws(() => createApp({ databasePath: ':memory:', ...admin, adminPassword }), /ADMIN_PASSWORD must be at least 15/);
+  }
+  assert.throws(() => createApp({
+    databasePath: ':memory:', adminUsername: 'same as password', adminPassword: 'Same as password',
+  }), /ADMIN_PASSWORD must be at least 15/);
   const path = await databasePath(t);
   const first = await runServer(t, { databasePath: path });
   await first.stop();
+
+  const db = new Database(path);
+  const legacyPassword = 'old password';
+  try {
+    const { salt } = db.prepare('SELECT salt FROM users').get();
+    db.prepare('UPDATE users SET password_hash = ?').run(scryptSync(legacyPassword, salt, 64).toString('hex'));
+  } finally {
+    db.close();
+  }
   const second = await runServer(t, { databasePath: path, adminPassword: 'replacement' });
-  await second.login();
+  await second.login(admin.adminUsername, legacyPassword);
   assert.equal((await second.request('/api/login', {
     method: 'POST', body: { username: admin.adminUsername, password: 'replacement' },
   })).status, 401);
@@ -261,14 +346,30 @@ test('MCP only discovers templates and appends escaped findings to the bearer ke
   const legacy = await connectMcp(t, origin, key);
   const modern = await connectMcp(t, origin, replacement, { pin: '2026-07-28' });
   const otherClient = await connectMcp(t, origin, otherKey);
-  assert.deepEqual((await modern.listTools()).tools.map(({ name }) => name).sort(), ['append_finding', 'list_templates']);
-  const catalog = (await legacy.callTool({ name: 'list_templates', arguments: {} })).structuredContent;
-  assert.equal(catalog.templateInstructions, project.templateInstructions);
-  assert.deepEqual(catalog.templates, ALL_TEMPLATES.map(({ id, title, category, severity }) => ({
-    id, title, category, severity,
-  })));
+  assert.deepEqual((await modern.listTools()).tools.map(({ name }) => name).sort(),
+    ['append_finding', 'get_template', 'list_templates']);
+  for (const client of [legacy, modern]) {
+    const guidance = await client.callTool({ name: 'list_templates', arguments: {} });
+    assert.equal(guidance.structuredContent.templateInstructions, project.templateInstructions);
+    assert.deepEqual(guidance.structuredContent.templates, []);
+    assert.match(guidance.structuredContent.reportFormat, /Description.*\nEvidence.*\nImpact.*\nRemediation/);
+    assert.match(guidance.content[0].text, /^Project guidance\nUse plain-language titles\.\n\nDefault finding format/);
+  }
   assert.equal((await otherClient.callTool({ name: 'list_templates', arguments: {} }))
     .structuredContent.templateInstructions, '');
+
+  const catalog = (await legacy.callTool({ name: 'list_templates', arguments: { query: '  INJECTION ', limit: 1 } }))
+    .structuredContent;
+  const { id: templateId, title, category, severity, cwe, tags } = ALL_TEMPLATES.find((t) => t.category === 'Injection');
+  assert.deepEqual(catalog, {
+    templates: [{ id: templateId, title, category, severity }], catalogAvailable: true, hasMore: true,
+  });
+  const detail = await modern.callTool({ name: 'get_template', arguments: { id: templateId } });
+  assert.deepEqual(detail.structuredContent, { id: templateId, category, tags, defaults: { title, severity, cwe } });
+  const noMatch = await legacy.callTool({ name: 'list_templates', arguments: { query: 'missing template id xyzz' } });
+  assert.deepEqual(noMatch.structuredContent, { templates: [], catalogAvailable: true, hasMore: false });
+  assert.equal((await legacy.callTool({ name: 'list_templates', arguments: { query: 'Injection', limit: 21 } })).isError, true);
+  assert.equal((await legacy.callTool({ name: 'get_template', arguments: { id: 'missing-template' } })).isError, true);
 
   const fields = ['description', 'poc', 'requestResponse', 'impact', 'remediation', 'notes', 'references'];
   const text = '<b>literal</b> & "quoted"\nnext';
@@ -276,6 +377,8 @@ test('MCP only discovers templates and appends escaped findings to the bearer ke
     idempotencyKey: 'finding-1',
     title: 'Example <report>',
     ...Object.fromEntries(fields.map((field) => [field, text])),
+    description: `${text}\r\n \r\nSecond paragraph`,
+    requestResponse: `  ${text}`,
   };
   const append = (client, arguments_) => client.callTool({ name: 'append_finding', arguments: arguments_ });
   const [one, two] = (await Promise.all([append(legacy, args), append(modern, args)]))
@@ -292,7 +395,14 @@ test('MCP only discovers templates and appends escaped findings to the bearer ke
   assert.equal(saved.status, 'Open');
   assert.equal(saved.severity, 'Medium');
   for (const field of fields) {
-    assert.equal(saved[field], '<p>&lt;b&gt;literal&lt;/b&gt; &amp; &quot;quoted&quot;<br>next</p>');
+    const escaped = '&lt;b&gt;literal&lt;/b&gt; &amp; &quot;quoted&quot;';
+    if (field === 'description') {
+      assert.equal(saved[field], `<p>${escaped}<br>next</p><p>Second paragraph</p>`);
+    } else if (field === 'requestResponse') {
+      assert.equal(saved[field], `<pre><code>  ${escaped}\nnext</code></pre>`);
+    } else {
+      assert.equal(saved[field], `<p>${escaped}<br>next</p>`);
+    }
   }
   assert.deepEqual(await (await request(otherPath + '/findings', { cookie })).json(), []);
   const isolated = (await append(otherClient, args)).structuredContent;
@@ -309,5 +419,6 @@ test('MCP only discovers templates and appends escaped findings to the bearer ke
   const second = await runServer(t, { databasePath: path });
   const restarted = await connectMcp(t, second.origin, replacement);
   assert.deepEqual((await append(restarted, args)).structuredContent, { created: false, findingId: saved.id });
-  assert.deepEqual(await (await second.request(projectPath + '/findings', { cookie })).json(), []);
+  const newSession = await second.login();
+  assert.deepEqual(await (await second.request(projectPath + '/findings', { cookie: newSession.cookie })).json(), []);
 });

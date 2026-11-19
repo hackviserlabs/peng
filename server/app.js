@@ -2,12 +2,12 @@ import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
 import { promisify } from 'node:util';
 import { parseCookie } from 'cookie';
 import express from 'express';
+import { createLoginLimiter } from './login-limiter.js';
 import { createMcpEndpoint } from './mcp.js';
 import * as schemas from './schemas.js';
 import { digest, openStore } from './store.js';
 
 const deriveKey = promisify(scrypt);
-const sessionCookie = 'peng_session';
 const dummySalt = randomBytes(16).toString('hex');
 const dummyHash = Buffer.alloc(64);
 const newToken = () => randomBytes(32).toString('base64url');
@@ -43,6 +43,7 @@ export function createApp({
   const app = express();
   app.disable('x-powered-by');
 
+  const loginLimiter = createLoginLimiter();
   const cookieOptions = { httpOnly: true, sameSite: 'strict', secure: cookieSecure, path: '/api' };
   const loginJson = express.json({ limit: '8kb' });
   const apiJson = express.json({ limit: '16mb' });
@@ -72,7 +73,9 @@ export function createApp({
     if (!origin || (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('origin') !== origin)) {
       return res.status(403).json({ error: 'Invalid request origin' });
     }
-    const token = parseCookie(req.get('cookie') ?? '')[sessionCookie];
+    // Host-only cookies are shared between ports. Use the public origin for the name.
+    req.sessionCookie = `peng_session_${digest(origin).slice(0, 16)}`;
+    const token = parseCookie(req.get('cookie') ?? '')[req.sessionCookie];
     if (/^[A-Za-z0-9_-]{43}$/.test(token ?? '')) req.sessionToken = token;
     next();
   });
@@ -81,19 +84,27 @@ export function createApp({
     const parsed = schemas.credentials.safeParse(req.body);
     if (!parsed.success) return invalidBody(res);
     const { username, password } = parsed.data;
-    const user = statements.user.get(username);
-    const candidate = await deriveKey(password, user?.salt ?? dummySalt, 64);
-    const expected = user ? Buffer.from(user.password_hash, 'hex') : dummyHash;
-    if (!timingSafeEqual(candidate, expected) || !user) return unauthorized(res);
+    const retryAfter = loginLimiter.acquire(req.socket.remoteAddress);
+    if (retryAfter) {
+      return res.set('Retry-After', String(retryAfter)).status(429).json({ error: 'Too many login attempts. Try again later.' });
+    }
+    try {
+      const user = statements.user.get(username);
+      const candidate = await deriveKey(password, user?.salt ?? dummySalt, 64);
+      const expected = user ? Buffer.from(user.password_hash, 'hex') : dummyHash;
+      if (!timingSafeEqual(candidate, expected) || !user) return unauthorized(res);
 
-    const token = newToken();
-    const maxAge = store.createSession(user.id, token, req.sessionToken);
-    res.cookie(sessionCookie, token, { ...cookieOptions, maxAge }).json({ username: user.username });
+      const token = newToken();
+      const maxAge = store.createSession(user.id, token, req.sessionToken);
+      res.cookie(req.sessionCookie, token, { ...cookieOptions, maxAge }).json({ username: user.username });
+    } finally {
+      loginLimiter.release();
+    }
   });
 
   api.post('/logout', (req, res) => {
     if (req.sessionToken) statements.deleteSession.run(digest(req.sessionToken));
-    res.clearCookie(sessionCookie, cookieOptions).status(204).end();
+    res.clearCookie(req.sessionCookie, cookieOptions).status(204).end();
   });
 
   api.use((req, res, next) => {
