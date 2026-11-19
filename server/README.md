@@ -4,25 +4,41 @@ The backend serves the browser API and the Streamable HTTP MCP endpoint on one p
 
 ## Run
 
-Use Node.js 22 or later. Generate a password with `openssl rand -hex 24` and save it. Run these commands from the repository root for a local HTTP setup, then enter the saved password when prompted.
+Use Node.js 22 or later. From the repository root, start a credential-free local workspace on an ephemeral loopback port.
 
 ```sh
 cd server
 npm ci
+DEPLOY_MODE=local PORT=0 npm start
+```
+
+For an organization deployment, generate and save a password with `openssl rand -hex 24`. For testing organization mode over loopback HTTP, enter the saved password when prompted.
+
+```sh
 printf 'Admin password: '
 read -rs peng_admin_password
-ADMIN_USERNAME=admin ADMIN_PASSWORD="$peng_admin_password" COOKIE_SECURE=false PORT=0 npm start
+BIND_HOST=127.0.0.1 ADMIN_USERNAME=admin ADMIN_PASSWORD="$peng_admin_password" COOKIE_SECURE=false PORT=0 npm start
 ```
 
 | Environment variable | Behavior |
 | --- | --- |
-| `PORT` | Defaults to `3000` on `0.0.0.0`. Use `0` for an ephemeral port. |
+| `DEPLOY_MODE` | `organization` (default) or `local`. Startup rejects other values. |
+| `PORT` | Defaults to `3000`. Use `0` for an ephemeral port. |
+| `BIND_HOST` | Defaults to `127.0.0.1` in local mode and `0.0.0.0` in organization mode. For a local-mode backend behind a container proxy, set `BIND_HOST=0.0.0.0` on the private network and publish only the proxy on loopback. |
 | `DATABASE_PATH` | Defaults to `./data/peng.sqlite3` relative to the process working directory. Mount the parent directory on a persistent, writable volume for the database and its SQLite WAL files. |
-| `COOKIE_SECURE` | Defaults to `true`. Set to `false` for local plain HTTP. |
-| `APP_ORIGIN` | Set to the browser-facing origin, including the scheme and any non-default port, such as `https://reports.example.com`. The server verifies the incoming Host against this origin. When unset, the server expects an HTTP origin derived from the request Host. |
-| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Required together on first startup with an empty database. Use a randomly generated password. Bootstrap requires at least 15 characters after trimming and rejects several common values, placeholders and passwords matching the username. Startup against a populated database can omit these variables and keeps the saved credentials. |
+| `COOKIE_SECURE` | Defaults to `true`. Set to `false` for plain HTTP when testing organization mode. |
+| `APP_ORIGIN` | Set to the client-facing origin, including the scheme and any non-default port, such as `https://reports.example.com`. The incoming Host must match the configured authority. When unset, the expected origin is HTTP and derived from Host. In local mode that Host must be `localhost`, an IPv4 loopback address, or `[::1]`, with an optional port. The server ignores forwarded Host headers. |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | Used only in organization mode. Required together to initialize an empty database or promote a local workspace without a primary admin. Bootstrap requires at least 15 characters after trimming and rejects several common values, placeholders and passwords matching the username. Later startups can omit both variables and keep the saved credentials. |
 
 Run `npm test` from `server/` to exercise the API and both MCP protocol modes. Tests bind to ephemeral loopback ports and use in-memory or temporary SQLite databases.
+
+## SQLite workspace and mode changes
+
+Stop the backend before switching modes and reuse the same database volume. A fresh local database stores projects and findings under a workspace owner with no login. The first organization startup promotes that owner in place using the provided admin credentials. Projects, findings, template instructions, and MCP idempotency records stay attached to the same owner.
+
+On a database initialized in organization mode, local mode exposes the primary admin's workspace. For existing databases created before deploy modes, the primary admin is the earliest user by SQLite ID, matching the original bootstrap order. Other owners' records remain private to their organization accounts. Local requests ignore existing session cookies and bearer keys. Saved organization credentials, sessions, and keys can be used again in organization mode subject to their usual validity checks.
+
+Local mode gives everyone with network access to the allowed Host full access to the shared workspace. Keep the backend and any public-facing proxy bound to loopback or behind a trusted private access boundary. Host and browser origin checks protect against browser requests from other sites. Native clients can set their own headers.
 
 ## Docker and nginx
 
@@ -55,7 +71,9 @@ location = /healthz {
 
 ## Browser API
 
-Use relative URLs from the frontend. Login sets a host-only, HttpOnly, SameSite=Strict session cookie scoped to `/api` that expires after seven days. Logout revokes the session. All API mutations, including login and logout, require an exact same-origin `Origin` header, which browsers send on same-origin fetch mutations. Send that header explicitly in scripted API clients.
+Use relative URLs from the frontend. All API mutations in both modes require an exact same-origin `Origin` header, which browsers send on same-origin fetch mutations. Send that header explicitly in scripted API clients. Local mode also rejects mismatched Origin headers on reads and browser Fetch Metadata that identifies a request from another origin.
+
+In organization mode login sets a host-only, HttpOnly, SameSite=Strict session cookie scoped to `/api` that expires after seven days. Logout revokes the session. In local mode project and finding routes use the shared workspace. Login, logout, and key management return `404` and set no cookies.
 
 Save and replay the cookie returned by login. Its name is derived from the public origin so deployments on different local ports can coexist in the same browser. Upgrading from the old `peng_session` name or changing the public origin requires signing in again. Browsers can still send cookies to other ports on the same host.
 
@@ -63,10 +81,11 @@ Each server admits up to eight validly formed login attempts per connection peer
 
 | Method and path | Body and response |
 | --- | --- |
-| `GET /api/session` | `200 {username}` with a valid session, or `401`. |
+| `GET /api/config` | Public `200 {mode}` in both modes. |
+| `GET /api/session` | Local mode returns `200 {mode:"local"}`. Organization mode returns `200 {username,mode:"organization"}` with a valid session or `401`. |
 | `POST /api/login` | JSON `{username,password}`. Returns `200 {username}` and sets the session cookie, `401` for invalid credentials, or `429` when busy or throttled. |
 | `POST /api/logout` | `204` and clears the session cookie. |
-| `GET /api/projects` | Array of the session owner's projects. |
+| `GET /api/projects` | Array of the current workspace's projects. |
 | `PUT /api/projects/:id` | Upserts the full app `Project`. Returns `204`. Omit optional `templateInstructions` to keep the saved value or send an empty string to clear it. |
 | `DELETE /api/projects/:id` | Deletes the project, findings and keys. Returns `204`. |
 | `GET /api/projects/:id/findings` | Array of findings for the project. |
@@ -80,10 +99,14 @@ Project and finding IDs in PUT bodies must match the path. The browser API prese
 
 ## MCP
 
-Configure the client for Streamable HTTP at `https://reports.example.com/mcp` with an `Authorization: Bearer <key>` header on every request. The endpoint supports modern per-request MCP and legacy stateless Streamable HTTP.
+The endpoint supports modern per-request MCP and legacy stateless Streamable HTTP. In organization mode, configure the client for Streamable HTTP at the deployment's `/mcp` URL with `Authorization: Bearer <key>` on every request. The key selects a single project.
+
+In local mode, use the same endpoint without credentials. Call `list_projects` with `{}` to get `{projects:[{id,name}]}` for the shared workspace. Pass one of those IDs as `projectId` to any of the three report tools below. You can omit `projectId` when there is exactly one project. With multiple projects, an explicit ID is required even when names differ. An unknown ID or empty workspace returns a tool error.
+
+Local MCP validates any supplied Origin and rejects browser requests marked as coming from another origin. Browser MCP mutations must send the exact same-origin `Origin` header. Native clients can omit Origin and send MCP POST requests as `application/json`.
 
 - **`list_templates`** with `{}` returns the project's `templateInstructions` first, followed by a readable `reportFormat` and an empty `templates` array. For optional catalog search, pass a nonempty `query` of up to 120 characters and a `limit` from 1 to 20 (default 8). Search returns matching `id`, `title`, `category`, and `severity` summaries and `hasMore`. Both modes return `catalogAvailable`.
 - **`get_template`** takes `{id}` from a search result and returns the template's category, tags, and suggested `title`, `severity`, and `cwe` defaults. Adapt those defaults to the verified finding. The default report format works with any project, including when the catalog is unavailable.
-- **`append_finding`** requires `title` and a caller-generated `idempotencyKey`. It accepts an optional `severity` (defaults to `Medium`) and plain-text `description`, `poc`, `requestResponse`, `impact`, `remediation`, `notes`, `references`, `url`, `method`, `parameter`, `affectedHost`, `port`, `cve`, `cwe`, `cvss`, and `cvssVector`. It creates an `Open` finding in the bearer key's project and returns `{findingId,created}`. Separate paragraphs with blank lines. The backend escapes the text for the HTML renderer and preserves indentation and line breaks in request and response samples.
+- **`append_finding`** requires `title` and a caller-generated `idempotencyKey`. It accepts an optional `severity` (defaults to `Medium`) and plain-text `description`, `poc`, `requestResponse`, `impact`, `remediation`, `notes`, `references`, `url`, `method`, `parameter`, `affectedHost`, `port`, `cve`, `cwe`, `cvss`, and `cvssVector`. It creates an `Open` finding in the selected project and returns `{findingId,created}`. Separate paragraphs with blank lines. The backend escapes the text for the HTML renderer and preserves indentation and line breaks in request and response samples.
 
 Retry a submission with the same idempotency key and finding content. A retry returns the original finding ID and `created: false`, even after a restart, a key rotation, or deletion of that finding. Reusing a key with different content returns a tool error. Idempotency keys are scoped to each project and are removed with the project.

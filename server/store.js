@@ -17,9 +17,10 @@ export function digest(value) {
   return createHash('sha256').update(value).digest('hex');
 }
 
-export function openStore(path, username, password) {
+export function openStore(path, { local, username, password }) {
   if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
   const db = new Database(path);
+  let workspaceOwnerId;
   try {
     db.pragma('journal_mode = WAL');
     db.pragma('foreign_keys = ON');
@@ -29,6 +30,10 @@ export function openStore(path, username, password) {
         username TEXT NOT NULL UNIQUE,
         salt TEXT NOT NULL,
         password_hash TEXT NOT NULL
+      );
+      CREATE TABLE IF NOT EXISTS local_workspace (
+        singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+        owner_id INTEGER NOT NULL REFERENCES users(id)
       );
       CREATE TABLE IF NOT EXISTS sessions (
         digest TEXT PRIMARY KEY,
@@ -72,10 +77,24 @@ export function openStore(path, username, password) {
       );
     `);
 
-    db.transaction(() => {
-      if (db.prepare('SELECT 1 FROM users LIMIT 1').get()) return;
+    workspaceOwnerId = db.transaction(() => {
+      let owner = db.prepare(`
+        SELECT users.id, users.username FROM local_workspace
+        JOIN users ON users.id = local_workspace.owner_id WHERE singleton = 1
+      `).get();
+      if (!owner) {
+        // Existing databases bootstrapped the primary admin before any other user.
+        owner = db.prepare('SELECT id, username FROM users ORDER BY id LIMIT 1').get();
+        if (!owner) {
+          // The empty username is reserved for the workspace before organization bootstrap.
+          const { lastInsertRowid: id } = db.prepare("INSERT INTO users (username, salt, password_hash) VALUES ('', '', '')").run();
+          owner = { id, username: '' };
+        }
+        db.prepare('INSERT INTO local_workspace (singleton, owner_id) VALUES (1, ?)').run(owner.id);
+      }
+      if (local || owner.username !== '') return owner.id;
       if (!username || !password) {
-        throw new Error('Set ADMIN_USERNAME and ADMIN_PASSWORD to initialize an empty database');
+        throw new Error('Set ADMIN_USERNAME and ADMIN_PASSWORD to initialize an empty database or promote a local workspace');
       }
       const trimmed = password.trim();
       const normalized = trimmed.toLowerCase();
@@ -85,7 +104,9 @@ export function openStore(path, username, password) {
       }
       const salt = randomBytes(16).toString('hex');
       const hash = scryptSync(password, salt, 64).toString('hex');
-      db.prepare('INSERT INTO users (username, salt, password_hash) VALUES (?, ?, ?)').run(username, salt, hash);
+      db.prepare('UPDATE users SET username = ?, salt = ?, password_hash = ? WHERE id = ?')
+        .run(username, salt, hash, owner.id);
+      return owner.id;
     }).immediate();
   } catch (error) {
     db.close();
@@ -94,17 +115,18 @@ export function openStore(path, username, password) {
 
   const statements = {
     health: db.prepare('SELECT 1'),
-    user: db.prepare('SELECT * FROM users WHERE username = ?'),
+    user: db.prepare("SELECT * FROM users WHERE username = ? AND username <> ''"),
     session: db.prepare(`
       SELECT users.id, users.username
       FROM sessions JOIN users ON sessions.owner_id = users.id
-      WHERE sessions.digest = ? AND sessions.expires_at > ?
+      WHERE sessions.digest = ? AND sessions.expires_at > ? AND users.username <> ''
     `),
     deleteSession: db.prepare('DELETE FROM sessions WHERE digest = ?'),
     deleteExpiredSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
     insertSession: db.prepare('INSERT INTO sessions (digest, owner_id, expires_at) VALUES (?, ?, ?)'),
     projects: db.prepare('SELECT data, template_instructions FROM projects WHERE owner_id = ?'),
-    project: db.prepare('SELECT 1 FROM projects WHERE owner_id = ? AND id = ?'),
+    project: db.prepare('SELECT owner_id, id, template_instructions FROM projects WHERE owner_id = ? AND id = ?'),
+    projectCandidates: db.prepare('SELECT owner_id, id, template_instructions FROM projects WHERE owner_id = ? LIMIT 2'),
     putProject: db.prepare(`
       INSERT INTO projects (owner_id, id, data, template_instructions) VALUES (?, ?, ?, ?)
       ON CONFLICT (owner_id, id) DO UPDATE SET
@@ -144,6 +166,7 @@ export function openStore(path, username, password) {
 
   return {
     statements,
+    workspaceOwnerId,
     close: () => db.close(),
     createSession: db.transaction((ownerId, token, previousToken) => {
       const now = Date.now();
@@ -152,9 +175,9 @@ export function openStore(path, username, password) {
       statements.insertSession.run(digest(token), ownerId, now + sessionDuration);
       return sessionDuration;
     }).immediate,
-    appendFinding: db.transaction((keyDigest, idempotencyKey, inputDigest, makeFinding) => {
-      const project = statements.mcpProject.get(keyDigest);
-      if (!project) return { error: 'Invalid or revoked project key' };
+    appendFinding: db.transaction((selectProject, idempotencyKey, inputDigest, makeFinding) => {
+      const project = selectProject();
+      if (project.error) return project;
       const { owner_id: ownerId, id: projectId } = project;
       const previous = statements.previousAppend.get(ownerId, projectId, idempotencyKey);
       if (previous) {

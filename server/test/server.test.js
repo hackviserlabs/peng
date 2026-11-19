@@ -17,7 +17,11 @@ import { digest } from '../store.js';
 const admin = { adminUsername: 'admin', adminPassword: 'test fixture password only' };
 
 async function runServer(t, options = {}) {
-  const backend = createApp({ databasePath: ':memory:', cookieSecure: false, ...admin, ...options });
+  const backend = createApp({
+    databasePath: ':memory:', cookieSecure: false,
+    ...(options.deployMode === 'local' ? {} : admin),
+    ...options,
+  });
   const server = backend.app.listen(0, '127.0.0.1');
   await once(server, 'listening');
   const origin = `http://127.0.0.1:${server.address().port}`;
@@ -68,7 +72,7 @@ async function addKey(request, path, cookie, name) {
 async function connectMcp(t, origin, key, mode = 'legacy') {
   const client = new Client({ name: 'integration-test', version: '1.0.0' }, { versionNegotiation: { mode } });
   const transport = new StreamableHTTPClientTransport(new URL('/mcp', origin), {
-    requestInit: { headers: { Authorization: `Bearer ${key}` } },
+    requestInit: { headers: key ? { Authorization: `Bearer ${key}` } : {} },
   });
   t.after(() => client.close());
   await client.connect(transport);
@@ -82,9 +86,21 @@ function databasePath(t) {
   });
 }
 
+function rawRequest(origin, path, { method = 'GET', headers, body } = {}) {
+  return new Promise((resolve, reject) => {
+    const outgoing = httpRequest(origin + path, { method, headers }, (incoming) => {
+      incoming.resume();
+      resolve(incoming);
+    });
+    outgoing.once('error', reject);
+    outgoing.end(body);
+  });
+}
+
 test('health, session cookie, login CSRF, rotation and logout', async (t) => {
   const { request, login, origin } = await runServer(t, { cookieSecure: true });
   assert.deepEqual(await (await request('/healthz')).json(), { status: 'ok' });
+  assert.deepEqual(await (await request('/api/config')).json(), { mode: 'organization' });
   assert.equal((await request('/api/session')).status, 401);
   const credentials = { username: admin.adminUsername, password: admin.adminPassword };
   assert.equal((await fetch(origin + '/api/login', {
@@ -101,7 +117,7 @@ test('health, session cookie, login CSRF, rotation and logout', async (t) => {
   for (const attribute of ['HttpOnly', 'Secure', 'SameSite=Strict', 'Path=/api', 'Max-Age=604800']) {
     assert.ok(setCookie.split('; ').includes(attribute), setCookie);
   }
-  assert.deepEqual(await (await request('/api/session', { cookie })).json(), { username: 'admin' });
+  assert.deepEqual(await (await request('/api/session', { cookie })).json(), { username: 'admin', mode: 'organization' });
 
   const renewal = await request('/api/login', { method: 'POST', body: credentials, cookie });
   assert.equal(renewal.status, 200);
@@ -166,7 +182,7 @@ test('login limiter caps concurrent work and has a global budget that expires', 
   limiter.release();
 });
 
-test('local servers on different ports can log in and out with a shared browser cookie jar', async (t) => {
+test('organization servers on different ports can log in and out with a shared browser cookie jar', async (t) => {
   const path = await databasePath(t);
   const first = await runServer(t, { databasePath: path });
   const second = await runServer(t, { databasePath: path });
@@ -186,19 +202,9 @@ test('local servers on different ports can log in and out with a shared browser 
 test('configured public HTTPS origin works behind a proxy that preserves Host', async (t) => {
   const appOrigin = 'https://reports.example:8443';
   const { request, origin } = await runServer(t, { appOrigin });
-  function forwarded(path, { method = 'GET', body, headers = {} } = {}) {
-    return new Promise((resolve, reject) => {
-      const outgoing = httpRequest(origin + path, {
-        method,
-        headers: { Host: new URL(appOrigin).host, ...headers },
-      }, (incoming) => {
-        incoming.resume();
-        resolve(incoming);
-      });
-      outgoing.once('error', reject);
-      outgoing.end(body);
-    });
-  }
+  const forwarded = (path, { headers, ...options } = {}) => rawRequest(origin, path, {
+    ...options, headers: { Host: new URL(appOrigin).host, ...headers },
+  });
   const login = await forwarded('/api/login', {
     method: 'POST',
     headers: { Origin: appOrigin, 'Content-Type': 'application/json' },
@@ -260,7 +266,7 @@ test('owner-scoped project, finding and key APIs persist across restarts', async
   });
   const { request } = second;
   ({ cookie } = await second.login());
-  assert.deepEqual(await (await request('/api/session', { cookie })).json(), { username: 'admin' });
+  assert.deepEqual(await (await request('/api/session', { cookie })).json(), { username: 'admin', mode: 'organization' });
   assert.deepEqual(await (await request('/api/projects', { cookie })).json(), [project]);
   const findings = await (await request(projectPath + '/findings', { cookie })).json();
   assert.deepEqual(findings.find(({ id }) => id === original.id), original);
@@ -320,6 +326,195 @@ test('bootstrap credentials are required for a fresh database and never overwrit
   assert.equal((await second.request('/api/login', {
     method: 'POST', body: { username: admin.adminUsername, password: 'replacement' },
   })).status, 401);
+});
+
+test('local browser API is credential-free and guards Hosts, Origins and mutations', async (t) => {
+  assert.throws(() => createApp({ databasePath: ':memory:', deployMode: '' }), /DEPLOY_MODE/);
+  assert.throws(() => createApp({ databasePath: ':memory:', deployMode: 'development' }), /DEPLOY_MODE/);
+  const { request, origin } = await runServer(t, { deployMode: 'local', adminUsername: 'ignored' });
+  for (const path of ['/api/config', '/api/session']) {
+    const response = await request(path);
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get('set-cookie'), null);
+    assert.deepEqual(await response.json(), { mode: 'local' });
+  }
+  for (const path of ['/api/login', '/api/logout']) {
+    const response = await request(path, { method: 'POST', body: { username: 'ignored', password: 'ignored' } });
+    assert.equal(response.status, 404);
+    assert.equal(response.headers.get('set-cookie'), null);
+  }
+
+  const project = createDefaultProject('Local project');
+  const path = '/api/projects/' + project.id;
+  for (const host of ['reports.example', 'localhost.example', '127.0.0.1.example']) {
+    assert.equal((await rawRequest(origin, '/api/config', { headers: { Host: host } })).statusCode, 403);
+    assert.equal((await rawRequest(origin, '/mcp', { headers: { Host: host } })).statusCode, 403);
+  }
+  for (const host of ['localhost:1234', '[::1]:1234', '127.0.0.2:1234']) {
+    assert.equal((await rawRequest(origin, '/api/config', { headers: { Host: host } })).statusCode, 200);
+  }
+  for (const headers of [{ Origin: 'https://unrelated.example' }, { 'Sec-Fetch-Site': 'same-site' }]) {
+    assert.equal((await request('/api/projects', { headers })).status, 403);
+    assert.equal((await request(path, { method: 'PUT', body: project, headers })).status, 403);
+    assert.equal((await request('/mcp', { headers })).status, 403);
+  }
+  assert.equal((await rawRequest(origin, path, { method: 'DELETE' })).statusCode, 403);
+  const mcpBody = JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
+  assert.equal((await rawRequest(origin, '/mcp', {
+    method: 'POST', body: mcpBody, headers: { 'Sec-Fetch-Site': 'same-origin', 'Content-Type': 'application/json' },
+  })).statusCode, 403);
+  assert.equal((await rawRequest(origin, '/mcp', {
+    method: 'POST', body: mcpBody, headers: { 'Content-Type': 'text/plain' },
+  })).statusCode, 415);
+  assert.equal((await request(path, { method: 'PUT', body: project })).status, 204);
+  assert.deepEqual(await (await request('/api/projects')).json(), [project]);
+  for (const method of ['GET', 'POST', 'DELETE']) {
+    const suffix = method === 'DELETE' ? '/unused-key' : '';
+    assert.equal((await request(path + '/keys' + suffix, { method, body: method === 'POST' ? { name: 'Key' } : undefined })).status, 404);
+  }
+});
+
+test('local API and MCP honor the configured proxy origin and ignore forwarded Host', async (t) => {
+  const appOrigin = 'https://reports.example:8443';
+  const { origin } = await runServer(t, { deployMode: 'local', appOrigin });
+  const host = new URL(appOrigin).host;
+  const mcpBody = JSON.stringify({
+    jsonrpc: '2.0', id: 1, method: 'initialize',
+    params: { protocolVersion: '2025-11-25', capabilities: {}, clientInfo: { name: 'test', version: '1' } },
+  });
+  const mcp = (headers) => rawRequest(origin, '/mcp', {
+    method: 'POST', body: mcpBody, headers: {
+      Host: host, Accept: 'application/json, text/event-stream', 'Content-Type': 'application/json',
+      'Sec-Fetch-Site': 'same-origin', ...headers,
+    },
+  });
+  assert.equal((await rawRequest(origin, '/api/config', { headers: { 'X-Forwarded-Host': host } })).statusCode, 403);
+  assert.equal((await rawRequest(origin, '/api/config', { headers: { Host: host, Origin: appOrigin } })).statusCode, 200);
+  assert.equal((await mcp({ Origin: 'http://' + host })).statusCode, 403);
+  assert.equal((await mcp({ Origin: appOrigin })).statusCode, 200);
+});
+
+test('local MCP selects projects by ID and organization bootstrap preserves the workspace', async (t) => {
+  const path = await databasePath(t);
+  const local = await runServer(t, { databasePath: path, deployMode: 'local' });
+  const legacy = await connectMcp(t, local.origin);
+  const modern = await connectMcp(t, local.origin, undefined, { pin: '2026-07-28' });
+  const call = (name, args = {}) => modern.callTool({ name, arguments: args });
+  assert.deepEqual((await legacy.listTools()).tools.map(({ name }) => name).sort(),
+    ['append_finding', 'get_template', 'list_projects', 'list_templates']);
+  assert.deepEqual((await call('list_projects')).structuredContent, { projects: [] });
+  assert.equal((await call('list_templates')).isError, true);
+
+  const first = { ...createDefaultProject('Same name'), templateInstructions: 'First project guidance.' };
+  const second = { ...createDefaultProject('Same name'), templateInstructions: 'Second project guidance.' };
+  for (const project of [first, second]) {
+    assert.equal((await local.request('/api/projects/' + project.id, { method: 'PUT', body: project })).status, 204);
+    if (project === first) {
+      assert.equal((await call('list_templates')).structuredContent.templateInstructions, first.templateInstructions);
+    }
+  }
+  assert.deepEqual((await call('list_projects')).structuredContent.projects.sort((a, b) => a.id.localeCompare(b.id)),
+    [first, second].map(({ id, name }) => ({ id, name })).sort((a, b) => a.id.localeCompare(b.id)));
+  assert.equal((await call('list_templates')).isError, true);
+  assert.equal((await call('list_templates', { projectId: second.id })).structuredContent.templateInstructions,
+    second.templateInstructions);
+  const templateId = ALL_TEMPLATES[0].id;
+  assert.equal((await call('get_template', { id: templateId, projectId: first.id })).structuredContent.id, templateId);
+  assert.equal((await call('get_template', { id: templateId, projectId: 'unknown' })).isError, true);
+  const finding = { title: 'Verified observation', idempotencyKey: 'retry-1' };
+  assert.equal((await call('append_finding', finding)).isError, true);
+  const saved = (await call('append_finding', { ...finding, projectId: second.id })).structuredContent;
+  assert.equal(saved.created, true);
+  assert.deepEqual((await call('append_finding', { ...finding, projectId: second.id })).structuredContent,
+    { ...saved, created: false });
+  assert.deepEqual(await (await local.request('/api/projects/' + first.id + '/findings')).json(), []);
+  await local.stop();
+
+  const db = new Database(path);
+  try {
+    assert.deepEqual(db.prepare('SELECT username, salt, password_hash FROM users').all(),
+      [{ username: '', salt: '', password_hash: '' }]);
+    for (const table of ['sessions', 'mcp_keys']) assert.equal(db.prepare(`SELECT * FROM ${table}`).all().length, 0);
+  } finally {
+    db.close();
+  }
+  assert.throws(() => createApp({ databasePath: path }), /promote a local workspace/);
+  const organization = await runServer(t, { databasePath: path });
+  assert.equal((await organization.request('/api/projects')).status, 401);
+  assert.equal((await organization.request('/mcp')).status, 401);
+  const { cookie } = await organization.login();
+  const secondPath = '/api/projects/' + second.id;
+  assert.equal((await (await organization.request('/api/projects', { cookie })).json()).length, 2);
+  const [record] = await (await organization.request(secondPath + '/findings', { cookie })).json();
+  assert.equal(record.id, saved.findingId);
+  assert.equal(record.projectId, second.id);
+  const key = await addKey(organization.request, secondPath, cookie, 'Report client');
+  const scoped = await connectMcp(t, organization.origin, key);
+  assert.deepEqual((await scoped.callTool({ name: 'append_finding', arguments: finding })).structuredContent,
+    { ...saved, created: false });
+});
+
+test('an existing organization database exposes only its primary workspace in local mode', async (t) => {
+  const path = await databasePath(t);
+  const first = await runServer(t, { databasePath: path });
+  await first.stop();
+  const db = new Database(path);
+  try {
+    db.prepare(`
+      INSERT INTO users (username, salt, password_hash)
+      SELECT 'other', salt, password_hash FROM users WHERE username = 'admin'
+    `).run();
+  } finally {
+    db.close();
+  }
+  const organization = await runServer(t, { databasePath: path });
+  const primary = { ...createDefaultProject('Primary project'), templateInstructions: 'Primary guidance' };
+  const privateProject = createDefaultProject('Other owner project');
+  const primaryPath = '/api/projects/' + primary.id;
+  const privatePath = '/api/projects/' + privateProject.id;
+  const { cookie: primaryCookie } = await organization.login();
+  const { cookie: otherCookie } = await organization.login('other');
+  assert.equal((await organization.request(primaryPath, { method: 'PUT', body: primary, cookie: primaryCookie })).status, 204);
+  assert.equal((await organization.request(primaryPath, {
+    method: 'PUT', body: { ...primary, name: 'Same ID, different owner' }, cookie: otherCookie,
+  })).status, 204);
+  assert.equal((await organization.request(privatePath, {
+    method: 'PUT', body: privateProject, cookie: otherCookie,
+  })).status, 204);
+  const otherKey = await addKey(organization.request, privatePath, otherCookie, 'Other owner key');
+  await organization.stop();
+  // Remove the owner marker to simulate a database from before deploy modes.
+  const legacy = new Database(path);
+  try {
+    legacy.exec('DROP TABLE local_workspace');
+  } finally {
+    legacy.close();
+  }
+
+  const local = await runServer(t, { databasePath: path, deployMode: 'local' });
+  const { request } = local;
+  assert.deepEqual(await (await request('/api/projects', { cookie: otherCookie })).json(), [primary]);
+  assert.equal((await request(privatePath + '/findings')).status, 404);
+  const mcp = await connectMcp(t, local.origin, otherKey);
+  assert.deepEqual((await mcp.callTool({ name: 'list_projects', arguments: {} })).structuredContent,
+    { projects: [{ id: primary.id, name: primary.name }] });
+  assert.equal((await mcp.callTool({ name: 'list_templates', arguments: { projectId: privateProject.id } })).isError, true);
+  assert.equal((await mcp.callTool({ name: 'list_templates', arguments: { projectId: primary.id } }))
+    .structuredContent.templateInstructions, primary.templateInstructions);
+  assert.equal((await mcp.callTool({ name: 'append_finding', arguments: {
+    projectId: primary.id, title: 'Primary finding', idempotencyKey: 'primary-1',
+  } })).structuredContent.created, true);
+  await local.stop();
+
+  const restored = await runServer(t, { databasePath: path, adminUsername: undefined, adminPassword: undefined });
+  const { cookie: restoredOther } = await restored.login('other');
+  const { cookie: restoredPrimary } = await restored.login();
+  assert.deepEqual(await (await restored.request(primaryPath + '/findings', { cookie: restoredOther })).json(), []);
+  const [primaryFinding] = await (await restored.request(primaryPath + '/findings', { cookie: restoredPrimary })).json();
+  assert.equal(primaryFinding.title, 'Primary finding');
+  const restoredMcp = await connectMcp(t, restored.origin, otherKey);
+  assert.equal((await restoredMcp.callTool({ name: 'list_templates', arguments: {} }))
+    .structuredContent.templateInstructions, '');
 });
 
 test('MCP only discovers templates and appends escaped findings to the bearer key project', async (t) => {

@@ -1,4 +1,5 @@
 import { randomBytes, randomUUID, scrypt, timingSafeEqual } from 'node:crypto';
+import { isIPv4 } from 'node:net';
 import { promisify } from 'node:util';
 import { parseCookie } from 'cookie';
 import express from 'express';
@@ -14,6 +15,8 @@ const newToken = () => randomBytes(32).toString('base64url');
 const notFound = (res) => res.status(404).json({ error: 'Not found' });
 const unauthorized = (res) => res.status(401).json({ error: 'Unauthorized' });
 const invalidBody = (res) => res.status(400).json({ error: 'Invalid request body' });
+const invalidOrigin = (res) => res.status(403).json({ error: 'Invalid request origin' });
+const safeMethod = (req) => ['GET', 'HEAD', 'OPTIONS'].includes(req.method);
 
 function parseOrigin(value) {
   const url = new URL(value);
@@ -30,16 +33,21 @@ export function createApp({
   adminPassword,
   cookieSecure = true,
   appOrigin,
+  deployMode = 'organization',
 }) {
+  if (deployMode !== 'local' && deployMode !== 'organization') {
+    throw new Error('DEPLOY_MODE must be local or organization');
+  }
+  const local = deployMode === 'local';
   const publicOrigin = appOrigin ? parseOrigin(appOrigin) : undefined;
-  if ((adminUsername !== undefined || adminPassword !== undefined)
+  if (!local && (adminUsername !== undefined || adminPassword !== undefined)
       && !schemas.credentials.safeParse({ username: adminUsername, password: adminPassword }).success) {
     throw new Error('Provide both valid ADMIN_USERNAME and ADMIN_PASSWORD values');
   }
 
-  const store = openStore(databasePath, adminUsername, adminPassword);
+  const store = openStore(databasePath, { local, username: adminUsername, password: adminPassword });
   const { statements } = store;
-  const mcp = createMcpEndpoint(store);
+  const mcp = createMcpEndpoint(store, { local });
   const app = express();
   app.disable('x-powered-by');
 
@@ -51,13 +59,23 @@ export function createApp({
   function requestOrigin(req) {
     // Use the configured public origin when TLS terminates at the proxy.
     const authority = req.get('host');
-    if (!authority) return;
+    if (!authority || /[^a-z0-9_.:[\]-]/i.test(authority)) return;
     try {
       const url = parseOrigin(`${publicOrigin?.protocol ?? 'http:'}//${authority}`);
-      if (!publicOrigin || url.host === publicOrigin.host) return url.origin;
+      if (publicOrigin) return url.host === publicOrigin.host ? publicOrigin.origin : undefined;
+      const { hostname } = url;
+      if (!local || hostname === 'localhost' || hostname === '[::1]'
+          || (isIPv4(hostname) && hostname.startsWith('127.'))) return url.origin;
     } catch {
       // Reject malformed Host values.
     }
+  }
+
+  function validLocalBrowserRequest(req, origin) {
+    const suppliedOrigin = req.get('origin');
+    const site = req.get('sec-fetch-site');
+    return (suppliedOrigin === undefined || suppliedOrigin === origin)
+      && (site === undefined || site === 'same-origin' || site === 'none');
   }
 
   app.get('/healthz', (_req, res) => {
@@ -70,9 +88,11 @@ export function createApp({
   api.use((req, res, next) => {
     res.set('Cache-Control', 'no-store');
     const origin = requestOrigin(req);
-    if (!origin || (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && req.get('origin') !== origin)) {
-      return res.status(403).json({ error: 'Invalid request origin' });
+    if (!origin || (!safeMethod(req) && req.get('origin') !== origin)
+        || (local && !validLocalBrowserRequest(req, origin))) {
+      return invalidOrigin(res);
     }
+    if (local) return next();
     // Host-only cookies are shared between ports. Use the public origin for the name.
     req.sessionCookie = `peng_session_${digest(origin).slice(0, 16)}`;
     const token = parseCookie(req.get('cookie') ?? '')[req.sessionCookie];
@@ -80,7 +100,10 @@ export function createApp({
     next();
   });
 
-  api.post('/login', loginJson, async (req, res) => {
+  api.get('/config', (_req, res) => res.json({ mode: deployMode }));
+
+  const accounts = express.Router();
+  accounts.post('/login', loginJson, async (req, res) => {
     const parsed = schemas.credentials.safeParse(req.body);
     if (!parsed.success) return invalidBody(res);
     const { username, password } = parsed.data;
@@ -102,19 +125,30 @@ export function createApp({
     }
   });
 
-  api.post('/logout', (req, res) => {
+  accounts.post('/logout', (req, res) => {
     if (req.sessionToken) statements.deleteSession.run(digest(req.sessionToken));
     res.clearCookie(req.sessionCookie, cookieOptions).status(204).end();
   });
 
-  api.use((req, res, next) => {
+  accounts.use((req, res, next) => {
     const user = req.sessionToken && statements.session.get(digest(req.sessionToken), Date.now());
     if (!user) return unauthorized(res);
     req.user = user;
     next();
   });
 
-  api.get('/session', (req, res) => res.json({ username: req.user.username }));
+  if (local) {
+    api.use((req, _res, next) => {
+      req.user = { id: store.workspaceOwnerId };
+      next();
+    });
+  } else {
+    api.use(accounts);
+  }
+
+  api.get('/session', (req, res) => res.json(local
+    ? { mode: deployMode }
+    : { username: req.user.username, mode: deployMode }));
 
   api.get('/projects', (req, res) => {
     res.json(statements.projects.all(req.user.id).map(({ data, template_instructions }) => {
@@ -139,6 +173,7 @@ export function createApp({
 
   const project = express.Router({ mergeParams: true });
   api.use('/projects/:id', project);
+  if (local) project.use('/keys', (_req, res) => notFound(res));
   project.use((req, res, next) => {
     if (!statements.project.get(req.user.id, req.params.id)) return notFound(res);
     next();
@@ -185,9 +220,19 @@ export function createApp({
   app.all('/mcp', (req, res, next) => {
     res.set('Cache-Control', 'no-store');
     const origin = requestOrigin(req);
-    if (!origin || (req.get('origin') !== undefined && req.get('origin') !== origin)) {
-      return res.status(403).json({ error: 'Invalid request origin' });
+    if (!origin) return invalidOrigin(res);
+    if (local) {
+      if (!validLocalBrowserRequest(req, origin)
+          || (!safeMethod(req) && req.get('sec-fetch-site') !== undefined && req.get('origin') !== origin)) {
+        return invalidOrigin(res);
+      }
+      // Originless native clients use JSON. Browser forms cannot send this media type.
+      if (req.method === 'POST' && !req.is('application/json')) {
+        return res.status(415).json({ error: 'MCP POST requests must use application/json' });
+      }
+      return next();
     }
+    if (req.get('origin') !== undefined && req.get('origin') !== origin) return invalidOrigin(res);
     const token = /^Bearer (peng_[A-Za-z0-9_-]{43})$/i.exec(req.get('authorization') ?? '')?.[1];
     const keyDigest = token && digest(token);
     const key = keyDigest && statements.mcpProject.get(keyDigest);
