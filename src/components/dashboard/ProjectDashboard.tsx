@@ -10,6 +10,7 @@ interface ProjectDashboardProps {
     getFindingsError: (id: string) => string | undefined;
     onRetryFindings: (id: string) => void;
     busy: boolean;
+    serverBacked: boolean;
     account?: string;
     signOutDisabled: boolean;
     onSignOut?: () => void;
@@ -25,6 +26,7 @@ export default function ProjectDashboard({
     getFindingsError,
     onRetryFindings,
     busy,
+    serverBacked,
     account,
     signOutDisabled,
     onSignOut,
@@ -90,7 +92,7 @@ export default function ProjectDashboard({
                                 Open-source penetration test report writing tool. Write, manage, and export professional pentest reports — fast.
                             </p>
                             <p className="text-sm text-zinc-600 mb-6">
-                                {account
+                                {serverBacked
                                     ? 'Projects and findings are stored on the server. Import uploads the selected file to this workspace.'
                                     : 'Local workspace · Projects and findings are stored in this browser.'}
                             </p>
