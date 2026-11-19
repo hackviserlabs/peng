@@ -40,7 +40,7 @@ if (local) {
   assert.deepEqual(await (await request('/api/session')).json(), { username, mode });
 }
 
-const client = new Client({ name: 'compose-smoke', version: '1' });
+let client = new Client({ name: 'compose-smoke', version: '1' });
 try {
   await request(path, 'PUT', project, 403, 'http://untrusted.example');
   await request(path, 'PUT', project, 204);
@@ -93,6 +93,20 @@ try {
   const [updated] = await (await request(path + '/findings')).json();
   assert.equal(updated.status, patch.status);
   assert.equal(updated.triageNotes, patch.triageNotes);
+  const batch = Array.from({ length: 20 }, (_, i) => ({
+    title: 'Batch card ' + i, idempotencyKey: 'batch-' + i, severity: 'Info',
+  }));
+  const sendBatch = () => client.callTool({ name: 'append_findings', arguments: { ...selection, findings: batch } });
+  const first = (await sendBatch()).structuredContent.results;
+  assert.equal(first.length, 20);
+  assert.ok(first.every(item => item.created));
+  await client.close();
+  client = new Client({ name: 'returning-agent', version: '1' });
+  await client.connect(new StreamableHTTPClientTransport(new URL('/mcp', origin), { requestInit: { headers } }));
+  const second = (await sendBatch()).structuredContent.results;
+  assert.deepEqual(second, first.map(item => ({ ...item, created: false })));
+  const page = await client.callTool({ name: 'list_findings', arguments: { ...selection, query: 'Batch card', limit: 20 } });
+  assert.deepEqual(new Set(page.structuredContent.findings.map(item => item.id)), new Set(first.map(item => item.findingId)));
   if (!local) {
     const [issued] = await (await request(path + '/keys')).json();
     await request(path + '/keys/' + issued.id, 'DELETE', undefined, 204);

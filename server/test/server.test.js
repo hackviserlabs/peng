@@ -539,7 +539,7 @@ test('local MCP selects projects by ID and organization bootstrap preserves the 
     }
   }
   assert.deepEqual((await call('list_projects')).structuredContent.projects.sort((a, b) => a.id.localeCompare(b.id)),
-    [first, second].map(({ id, name }) => ({ id, name })).sort((a, b) => a.id.localeCompare(b.id)));
+    [first, second].map(({ id, name }) => ({ id, name, findingCount: 0 })).sort((a, b) => a.id.localeCompare(b.id)));
   assert.equal((await call('list_templates')).isError, true);
   assert.equal((await call('list_templates', { projectId: second.id })).structuredContent.templateInstructions,
     second.templateInstructions);
@@ -622,7 +622,7 @@ test('an existing organization database exposes only its primary workspace in lo
   assert.equal((await request(privatePath + '/findings')).status, 404);
   const mcp = await connectMcp(t, local.origin, otherKey);
   assert.deepEqual((await mcp.callTool({ name: 'list_projects', arguments: {} })).structuredContent,
-    { projects: [{ id: primary.id, name: primary.name }] });
+    { projects: [{ id: primary.id, name: primary.name, findingCount: 0 }] });
   assert.equal((await mcp.callTool({ name: 'list_templates', arguments: { projectId: privateProject.id } })).isError, true);
   assert.equal((await mcp.callTool({ name: 'list_templates', arguments: { projectId: primary.id } }))
     .structuredContent.templateInstructions, primary.templateInstructions);
@@ -682,10 +682,13 @@ test('MCP only discovers templates and appends escaped findings to the bearer ke
     .structuredContent;
   const { id: templateId, title, category, severity, cwe, tags } = ALL_TEMPLATES.find((t) => t.category === 'Injection');
   assert.deepEqual(catalog, {
-    templates: [{ id: templateId, title, category, severity }], catalogAvailable: true, hasMore: true,
+    templates: [{ id: templateId, title, category, severity }], catalogAvailable: true, hasMore: true, nextOffset: 1,
   });
   const detail = await modern.callTool({ name: 'get_template', arguments: { id: templateId } });
-  assert.deepEqual(detail.structuredContent, { id: templateId, category, tags, defaults: { title, severity, cwe } });
+  const { remediation_hint, references, ...metadata } = detail.structuredContent;
+  assert.equal(typeof remediation_hint, 'string');
+  assert.ok(Array.isArray(references));
+  assert.deepEqual(metadata, { id: templateId, category, tags, defaults: { title, severity, cwe } });
   const noMatch = await legacy.callTool({ name: 'list_templates', arguments: { query: 'missing template id xyzz' } });
   assert.deepEqual(noMatch.structuredContent, { templates: [], catalogAvailable: true, hasMore: false });
   assert.equal((await legacy.callTool({ name: 'list_templates', arguments: { query: 'Injection', limit: 21 } })).isError, true);

@@ -1,10 +1,9 @@
 import { z } from 'zod';
 import { createDefaultFinding } from '../src/types/index.ts';
-import { severity } from './schemas.js';
+import { findingStatus, findingConfidence, severity } from './schemas.js';
 import { digest } from './store.js';
 
-export const findingStatus = z.enum(['New', 'Open', 'Verified', 'False Positive', 'Duplicate', 'Accepted Risk', 'Fixed']);
-export const findingConfidence = z.enum(['high', 'medium', 'low']);
+export { findingStatus, findingConfidence };
 const title = z.string().trim().min(1).max(240);
 const text = z.string().max(24_000);
 const metadata = z.string().max(2_048);
@@ -85,7 +84,7 @@ export const findingDetails = z.looseObject({
 });
 
 export const appendInput = optionalFields.extend({
-  idempotencyKey: z.string().trim().min(1).max(200),
+  idempotencyKey: z.string().trim().min(1).max(200).describe('Scoped to one project. Retrying the same content returns its original findingId with created:false. Reusing the key with different content returns an error.'),
 }).refine(({ title, templateId }) => title !== undefined || templateId !== undefined, {
   path: ['title'],
   message: 'Provide a title or a templateId',

@@ -151,7 +151,7 @@ export function createMcpEndpoint(store, { local }) {
     }
 
     server.registerTool('append_finding', {
-      description: `Append a report finding. Read project guidance first via list_templates with ${guidanceInput}. Supply a title or templateId. Explicit fields override template defaults. Submit plain text and separate paragraphs with blank lines. Reuse the same idempotencyKey when retrying.`,
+      description: `Append a report finding. Read project guidance first via list_templates with ${guidanceInput}. Supply a title or templateId. Explicit fields override template defaults. Submit plain text and separate paragraphs with blank lines. An identical retry returns the original findingId with created:false. Reusing its idempotencyKey for different content returns an error.`,
       inputSchema: appendInput.safeExtend(projectInput),
       outputSchema: appendOutcome,
       annotations: appendAnnotations,
@@ -164,7 +164,7 @@ export function createMcpEndpoint(store, { local }) {
       description: 'Append up to 25 report findings to one project. Each item takes the append_finding fields and its own idempotencyKey. Results are in input order and use zero-based indices.',
       inputSchema: z.strictObject({
         ...projectInput,
-        findings: z.array(z.unknown()).min(1).max(25),
+        findings: z.array(z.unknown()).min(1).max(25).describe('Each item has the append_finding input shape, excluding projectId. Invalid items return an indexed error; valid items are committed independently.'),
       }),
       outputSchema: z.object({
         results: z.array(z.union([
