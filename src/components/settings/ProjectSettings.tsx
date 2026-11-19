@@ -4,6 +4,7 @@ import { Settings, FileText, Users, Calendar, Shield, Bookmark } from 'lucide-re
 import RichTextEditor from '../editor/RichTextEditor';
 import ScopeList from './ScopeList';
 import type { Project, Classification } from '../../types';
+import { TEMPLATE_INSTRUCTIONS_LIMIT } from '../../constants';
 
 interface ProjectSettingsProps {
     project: Project;
@@ -171,7 +172,7 @@ export default function ProjectSettings({ project, onUpdate }: ProjectSettingsPr
                                     <span className="block text-sm text-zinc-400">Project guidance for agents writing findings.</span>
                                     <textarea
                                         rows={5}
-                                        maxLength={16384}
+                                        maxLength={TEMPLATE_INSTRUCTIONS_LIMIT}
                                         value={project.templateInstructions ?? ''}
                                         onChange={(event) => onUpdate('templateInstructions', event.target.value)}
                                         className="w-full rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-sm text-zinc-200 focus:border-emerald-500/50 focus:outline-none"

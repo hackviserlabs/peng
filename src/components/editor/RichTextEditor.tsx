@@ -8,7 +8,7 @@ import Link from '@tiptap/extension-link';
 import Placeholder from '@tiptap/extension-placeholder';
 import CodeBlockLowlight from '@tiptap/extension-code-block-lowlight';
 import { common, createLowlight } from 'lowlight';
-import { useEffect, useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 const lowlight = createLowlight(common);
 
@@ -32,6 +32,7 @@ interface RichTextEditorProps {
 
 export default function RichTextEditor({ content, placeholder, onChange }: RichTextEditorProps) {
     const cleanContent = useMemo(() => sanitizeRichText(content), [content]);
+    const [pasteError, setPasteError] = useState('');
     const editor = useEditor({
         extensions: [
             StarterKit.configure({
@@ -75,13 +76,21 @@ export default function RichTextEditor({ content, placeholder, onChange }: RichT
                     if (item.type.indexOf('image/') === 0) {
                         const file = item.getAsFile();
                         if (file) {
+                            const { doc, selection } = view.state;
                             const reader = new FileReader();
-                            reader.onload = (e) => {
-                                const src = e.target?.result;
-                                if (view.isDestroyed || typeof src !== 'string') return;
-                                const node = view.state.schema.nodes.image.create({ src });
-                                const transaction = view.state.tr.replaceSelectionWith(node);
-                                view.dispatch(transaction);
+                            const isMounted = () => !view.isDestroyed && view.dom.isConnected;
+                            setPasteError('');
+                            reader.onerror = () => {
+                                if (isMounted()) setPasteError('Could not read the pasted image. Try pasting it again.');
+                            };
+                            reader.onload = () => {
+                                if (!isMounted() || typeof reader.result !== 'string') return;
+                                if (view.state.doc !== doc) {
+                                    setPasteError('The text changed while reading the image. Paste the image again.');
+                                    return;
+                                }
+                                const node = view.state.schema.nodes.image.create({ src: reader.result });
+                                view.dispatch(view.state.tr.setSelection(selection).replaceSelectionWith(node));
                             };
                             reader.readAsDataURL(file);
                             return true;
@@ -95,7 +104,9 @@ export default function RichTextEditor({ content, placeholder, onChange }: RichT
 
     useEffect(() => {
         if (editor && content !== editor.getHTML()) {
-            if (cleanContent !== editor.getHTML()) editor.commands.setContent(cleanContent, { emitUpdate: false });
+            if (cleanContent !== editor.getHTML()) {
+                editor.chain().setMeta('addToHistory', false).setContent(cleanContent, { emitUpdate: false }).run();
+            }
         }
     }, [content, cleanContent, editor]);
 
@@ -174,6 +185,7 @@ export default function RichTextEditor({ content, placeholder, onChange }: RichT
                 </BubbleMenu>
             )}
             <EditorContent editor={editor} />
+            {pasteError && <p role="alert" className="text-sm text-red-300 print:hidden">{pasteError}</p>}
         </div>
     );
 }
