@@ -2,7 +2,7 @@ import { createDefaultFinding, createDefaultProject, isValidScope, type Finding,
 import { sanitizeRichText } from './richText';
 import { TEMPLATE_INSTRUCTIONS_LIMIT } from '../constants';
 
-const RICH_FINDING_FIELDS = ['description', 'impact', 'remediation', 'poc', 'requestResponse', 'notes'] as const;
+const RICH_FINDING_FIELDS = ['description', 'impact', 'remediation', 'poc', 'requestResponse', 'references', 'notes'] as const;
 
 function readRecord(value: unknown): Record<string, unknown> {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error();
