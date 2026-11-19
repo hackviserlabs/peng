@@ -1,7 +1,8 @@
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info';
 export type Classification = 'Confidential' | 'Internal' | 'Public';
 export type FindingStatus = 'Open' | 'Fixed' | 'Accepted Risk';
-export type ScopeType = 'Web App' | 'API' | 'Network' | 'Mobile' | 'Other';
+const SCOPE_TYPES = ['Web App', 'API', 'Network', 'Mobile', 'Other'] as const;
+export type ScopeType = typeof SCOPE_TYPES[number];
 
 export interface ScopeItem {
     id: string;
@@ -10,12 +11,33 @@ export interface ScopeItem {
     included: boolean; // true = In Scope, false = Out of Scope
 }
 
-export function parseScopeItems(scope: string): ScopeItem[] {
+function readScopeItems(scope: string): unknown[] | undefined {
+    if (scope === '') return [];
     try {
-        const parsed = JSON.parse(scope);
+        const parsed: unknown = JSON.parse(scope);
         if (Array.isArray(parsed)) return parsed;
-    } catch { /* not JSON */ }
-    return [];
+    } catch { /* Invalid JSON. */ }
+}
+
+function validScopeItems(items: unknown[]): ScopeItem[] {
+    const ids = new Set<string>();
+    return items.filter((item): item is ScopeItem => {
+        if (!item || typeof item !== 'object') return false;
+        const { id, value, type, included } = item as Partial<ScopeItem>;
+        if (typeof id !== 'string' || !id || ids.has(id) || typeof value !== 'string'
+            || !type || !SCOPE_TYPES.includes(type) || typeof included !== 'boolean') return false;
+        ids.add(id);
+        return true;
+    });
+}
+
+export function isValidScope(scope: string): boolean {
+    const items = readScopeItems(scope);
+    return items !== undefined && validScopeItems(items).length === items.length;
+}
+
+export function parseScopeItems(scope: string): ScopeItem[] {
+    return validScopeItems(readScopeItems(scope) ?? []);
 }
 
 export function stringifyScopeItems(items: ScopeItem[]): string {

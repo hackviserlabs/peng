@@ -1,4 +1,8 @@
-import { createDefaultFinding, createDefaultProject, type Finding, type Project } from '../types';
+import { createDefaultFinding, createDefaultProject, isValidScope, type Finding, type Project } from '../types';
+import { sanitizeRichText } from './richText';
+import { TEMPLATE_INSTRUCTIONS_LIMIT } from '../constants';
+
+const RICH_FINDING_FIELDS = ['description', 'impact', 'remediation', 'poc', 'requestResponse', 'notes'] as const;
 
 function readRecord(value: unknown): Record<string, unknown> {
     if (value === null || typeof value !== 'object' || Array.isArray(value)) throw new Error();
@@ -40,8 +44,17 @@ export function parseProjectImport(json: string): { project: Project; findings: 
                 || !['Open', 'Fixed', 'Accepted Risk'].includes(finding.status)) throw new Error();
             return finding;
         });
+        if (!isValidScope(project.scope)) throw new Error('The import file contains invalid project scope entries.');
+        if ((project.templateInstructions?.length ?? 0) > TEMPLATE_INSTRUCTIONS_LIMIT) {
+            throw new Error(`Template instructions must be at most ${TEMPLATE_INSTRUCTIONS_LIMIT} characters.`);
+        }
+        project.executiveSummary = sanitizeRichText(project.executiveSummary);
+        for (const finding of findings) {
+            for (const field of RICH_FINDING_FIELDS) finding[field] = sanitizeRichText(finding[field]);
+        }
         return { project, findings };
-    } catch {
-        throw new Error('The import file must contain a valid project and findings.');
+    } catch (error) {
+        const message = error instanceof SyntaxError ? '' : error instanceof Error ? error.message : '';
+        throw new Error(message || 'The import file must contain a valid project and findings.');
     }
 }

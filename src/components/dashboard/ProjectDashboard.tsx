@@ -61,9 +61,9 @@ export default function ProjectDashboard({
                                     className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-zinc-300 bg-zinc-800/50 hover:bg-zinc-700 rounded-lg transition-colors border border-zinc-700/50">
                                     <Github className="w-4 h-4" /> GitHub
                                 </a>
-                                <label className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-zinc-300 bg-zinc-800/50 hover:bg-zinc-700 rounded-lg transition-colors border border-zinc-700/50 cursor-pointer">
+                                <label className="flex items-center gap-2 px-4 py-2.5 text-sm font-medium text-zinc-300 bg-zinc-800/50 hover:bg-zinc-700 rounded-lg transition-colors border border-zinc-700/50 cursor-pointer focus-within:ring-2 focus-within:ring-emerald-400">
                                     <Upload className="w-4 h-4" /> Import
-                                    <input type="file" accept=".json" onChange={onImport} disabled={busy} className="hidden" />
+                                    <input type="file" accept=".json" onChange={onImport} disabled={busy} className="sr-only" />
                                 </label>
                                 <button
                                     onClick={() => setShowCreate(true)} disabled={busy}

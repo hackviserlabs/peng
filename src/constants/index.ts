@@ -1,6 +1,8 @@
 import type { SeverityColorMap } from '../types';
 import type { Severity } from '../types';
 
+export const TEMPLATE_INSTRUCTIONS_LIMIT = 16_384;
+
 export const SEVERITY_COLORS: SeverityColorMap = {
     Critical: { bg: 'bg-red-500/10', text: 'text-red-500', border: 'border-red-500/20', dot: 'bg-red-500' },
     High: { bg: 'bg-orange-500/10', text: 'text-orange-500', border: 'border-orange-500/20', dot: 'bg-orange-500' },
