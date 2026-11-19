@@ -72,6 +72,10 @@ try {
   assert.equal(guidance.structuredContent.templateInstructions, project.templateInstructions);
   assert.equal(guidance.structuredContent.catalogAvailable, true);
   assert.ok(guidance.structuredContent.templates.length > 0);
+  const brief = await client.callTool({ name: 'list_templates', arguments: { ...selection, guidanceOnly: true } });
+  assert.equal(brief.structuredContent.templateInstructions, project.templateInstructions);
+  assert.equal(brief.structuredContent.templates?.length ?? 0, 0);
+  assert.ok(JSON.stringify(brief).length < JSON.stringify(guidance).length);
   const search = await client.callTool({ name: 'list_templates', arguments: { ...selection, query: 'network', limit: 1 } });
   const [template] = search.structuredContent.templates;
   const detail = await client.callTool({ name: 'get_template', arguments: { ...selection, id: template.id } });
