@@ -1,16 +1,15 @@
 import { useEffect, useState, type FormEvent, type ReactNode } from 'react';
-import { ApiError, api, errorMessage } from '../../lib/api';
+import { ApiError, api, errorMessage, getSession, type Session } from '../../lib/api';
 
-interface Session {
+interface Account {
     username: string;
-}
-
-export interface Account extends Session {
     expired: boolean;
     signOut: () => Promise<void>;
 }
 
-export default function ConnectedWorkspace({ children }: { children: (account: Account) => ReactNode }) {
+export type Connection = { mode: 'local' } | { mode: 'organization'; account: Account };
+
+export default function ConnectedWorkspace({ children }: { children: (connection: Connection) => ReactNode }) {
     const [session, setSession] = useState<Session | null>();
     const [expired, setExpired] = useState(false);
     const [attempt, setAttempt] = useState(0);
@@ -18,8 +17,8 @@ export default function ConnectedWorkspace({ children }: { children: (account: A
 
     useEffect(() => {
         let active = true;
-        api<Session>('/api/session', 'Checking session').then(account => {
-            if (active) setSession(account);
+        getSession().then(session => {
+            if (active) setSession(session);
         }).catch(error => {
             if (!active) return;
             if (error instanceof ApiError && error.status === 401) setSession(null);
@@ -28,16 +27,22 @@ export default function ConnectedWorkspace({ children }: { children: (account: A
         return () => { active = false; };
     }, [attempt]);
 
+    const organizationSession = session?.mode === 'organization' ? session : null;
+
     useEffect(() => {
+        if (!organizationSession) return;
         const expire = () => setExpired(true);
         window.addEventListener('workspace-session-expired', expire);
         return () => window.removeEventListener('workspace-session-expired', expire);
-    }, []);
+    }, [organizationSession]);
 
     const signIn = async (username: string, password: string) => {
         await api('/api/login', 'Signing in', 'POST', { username, password });
-        const account = await api<Session>('/api/session', 'Checking session');
-        if (session && account.username !== session.username) {
+        const account = await getSession();
+        if (account.mode !== 'organization') {
+            throw new Error('The server returned an unexpected deployment mode after sign-in.');
+        }
+        if (organizationSession && account.username !== organizationSession.username) {
             await api('/api/logout', 'Signing out', 'POST');
             throw new Error('Sign in with the same account to resume your workspace.');
         }
@@ -68,14 +73,16 @@ export default function ConnectedWorkspace({ children }: { children: (account: A
         );
     }
 
+    if (session?.mode === 'local') return children(session);
+
     return (
         <>
-            {session && (
+            {organizationSession && (
                 <div hidden={expired} inert={expired}>
-                    {children({ username: session.username, expired, signOut })}
+                    {children({ mode: 'organization', account: { username: organizationSession.username, expired, signOut } })}
                 </div>
             )}
-            {(!session || expired) && <SignIn username={session?.username} onSignIn={signIn} />}
+            {(!organizationSession || expired) && <SignIn username={organizationSession?.username} onSignIn={signIn} />}
         </>
     );
 }

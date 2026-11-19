@@ -1,5 +1,9 @@
 export const serverMode = import.meta.env.VITE_SERVER_MODE === 'true';
 
+export type DeploymentMode = 'local' | 'organization';
+
+export type Session = { mode: 'local' } | { mode: 'organization'; username: string };
+
 export class ApiError extends Error {
     readonly status: number;
 
@@ -49,4 +53,16 @@ export async function api<T = void>(
 
 export function projectPath(id: string) {
     return `/api/projects/${encodeURIComponent(id)}`;
+}
+
+export async function getSession(): Promise<Session> {
+    const session = await api<unknown>('/api/session', 'Checking session');
+    if (session && typeof session === 'object' && 'mode' in session) {
+        if (session.mode === 'local') return { mode: 'local' };
+        if (session.mode === 'organization' && 'username' in session
+            && typeof session.username === 'string' && session.username.trim()) {
+            return { mode: 'organization', username: session.username };
+        }
+    }
+    throw new Error('Checking session returned an invalid response.');
 }

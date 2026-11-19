@@ -9,7 +9,7 @@ import TemplateBrowser from './components/templates/TemplateBrowser';
 import { Workspace } from './lib/workspace';
 import { parseProjectImport } from './lib/projectImport';
 import { errorMessage, serverMode } from './lib/api';
-import ConnectedWorkspace, { type Account } from './components/workspace/ConnectedWorkspace';
+import ConnectedWorkspace, { type Connection } from './components/workspace/ConnectedWorkspace';
 import type { Finding, Project } from './types';
 import { createDefaultFinding, createDefaultProject } from './types';
 import type { FindingTemplate } from './constants';
@@ -17,14 +17,15 @@ import type { FindingTemplate } from './constants';
 type ActiveView = 'editor' | 'settings';
 
 export default function App() {
-  return serverMode ? <ConnectedWorkspace>{(account) => <WorkspaceView account={account} />}</ConnectedWorkspace>
+  return serverMode ? <ConnectedWorkspace>{(connection) => <WorkspaceView connection={connection} />}</ConnectedWorkspace>
     : <WorkspaceView />;
 }
 
-function WorkspaceView({ account }: { account?: Account }) {
+function WorkspaceView({ connection }: { connection?: Connection }) {
   const [workspace] = useState(() => new Workspace());
   useSyncExternalStore(workspace.subscribe, workspace.getSnapshot);
   const { projects, pending, saveErrors } = workspace;
+  const account = connection?.mode === 'organization' ? connection.account : undefined;
   const expired = account?.expired ?? false;
   const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
   const findingList = activeProjectId ? workspace.getFindings(activeProjectId) : undefined;
@@ -256,6 +257,7 @@ function WorkspaceView({ account }: { account?: Account }) {
           getFindingsError={(id) => workspace.getFindings(id)?.error}
           onRetryFindings={(id) => void workspace.loadFindings(id)}
           busy={busy}
+          serverBacked={Boolean(connection)}
           account={account?.username}
           signOutDisabled={Boolean(pending) || busy}
           onSignOut={account && (() => {
@@ -309,6 +311,7 @@ function WorkspaceView({ account }: { account?: Account }) {
         {activeView === 'settings' && !expired ? (
           <ProjectSettings
             project={activeProject}
+            mode={connection?.mode}
             onUpdate={handleUpdateProject}
           />
         ) : !findingList?.ready ? (

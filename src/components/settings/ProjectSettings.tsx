@@ -1,4 +1,5 @@
-import { serverMode } from '../../lib/api';
+import type { DeploymentMode } from '../../lib/api';
+import LocalMcpAccess from './LocalMcpAccess';
 import ProjectMcpKeys from './ProjectMcpKeys';
 import { Settings, FileText, Users, Calendar, Shield, Bookmark } from 'lucide-react';
 import RichTextEditor from '../editor/RichTextEditor';
@@ -8,10 +9,11 @@ import { TEMPLATE_INSTRUCTIONS_LIMIT } from '../../constants';
 
 interface ProjectSettingsProps {
     project: Project;
+    mode?: DeploymentMode;
     onUpdate: (field: keyof Project, value: string) => void;
 }
 
-export default function ProjectSettings({ project, onUpdate }: ProjectSettingsProps) {
+export default function ProjectSettings({ project, mode, onUpdate }: ProjectSettingsProps) {
     return (
         <main className="flex-1 flex flex-col min-w-0 bg-[#09090b] relative print:bg-white print:text-black">
             <div className="flex-1 overflow-y-auto print:overflow-visible">
@@ -165,7 +167,7 @@ export default function ProjectSettings({ project, onUpdate }: ProjectSettingsPr
                             />
                         </div>
 
-                        {serverMode && (
+                        {mode && (
                             <>
                                 <label className="block space-y-2">
                                     <span className="block text-lg font-semibold text-zinc-100">Template instructions</span>
@@ -178,7 +180,9 @@ export default function ProjectSettings({ project, onUpdate }: ProjectSettingsPr
                                         className="w-full rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-sm text-zinc-200 focus:border-emerald-500/50 focus:outline-none"
                                     />
                                 </label>
-                                <ProjectMcpKeys key={project.id} projectId={project.id} />
+                                {mode === 'local'
+                                    ? <LocalMcpAccess />
+                                    : <ProjectMcpKeys key={project.id} projectId={project.id} />}
                             </>
                         )}
 
