@@ -91,7 +91,7 @@ Apply `.env` changes with `docker compose up -d --wait`. Run `docker compose por
 Both modes use Streamable HTTP.
 
 - **Local.** Connect to `http://<printed-address>/mcp` without a key. Call `list_projects` to find the project's ID, then pass it as `projectId` to project-specific tools.
-- **Organization.** Create a named key under **MCP access** in project settings and copy it while it is visible. Use the displayed endpoint and send `Authorization: Bearer <key>`. The key selects the project, so start with `list_templates` using `{}`. Choose append access for submission, or manage access when the agent also needs to read and triage existing cards. Revoke the key when the agent's work is done.
+- **Organization.** Create a named key under **MCP access** in project settings and copy it while it is visible. Use the displayed endpoint and send `Authorization: Bearer <key>`. The key selects the project, so read project guidance with `list_templates` using `{"guidanceOnly":true}`. Choose append access for submission, or manage access when the agent also needs to read and triage existing cards. Revoke the key when the agent's work is done.
 
 ### Ports and HTTPS
 
@@ -99,7 +99,7 @@ Compose publishes nginx on `127.0.0.1`. The default `PENG_PORT=0` picks a free p
 
 For organization mode over HTTPS, point your TLS reverse proxy at the fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `APP_ORIGIN=https://your-public-host` and `COOKIE_SECURE=true` in `.env`, then run `docker compose up -d --wait`.
 
-Set writing instructions in project settings and have the agent read them with `list_templates` before submitting a finding. Reuse the same idempotency key when retrying. Findings appear in the open editor after the next refresh. To move reports from the static browser workspace to Docker, export JSON from the static app and import it in Docker. See the [backend reference](server/README.md) for API and MCP tool inputs.
+Set writing instructions in project settings and have the agent read them once per project in each reporting session. Reuse the same idempotency key when retrying. Findings appear in the open editor after the next refresh. To move reports from the static browser workspace to Docker, export JSON from the static app and import it in Docker. See the [backend reference](server/README.md) for API and MCP tool inputs.
 
 ## Usage
 

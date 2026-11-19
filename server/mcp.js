@@ -2,7 +2,7 @@ import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
 import {
-  appendDigest, appendInput, findingConfidence, findingDetails, findingPatch, findingStatus,
+  appendDigest, appendInput, evidenceGuidance, findingConfidence, findingDetails, findingPatch, findingStatus,
   newFinding, renderFindingFields, templateId,
 } from './mcp-findings.js';
 import { catalogSummaries, templateDetails, templateFindingFields, templates, templatesById } from './mcp-templates.js';
@@ -23,7 +23,7 @@ const appendAnnotations = { destructiveHint: false, idempotentHint: true, openWo
 const reportFormat = [
   'Title and severity — Name the finding and rate the observed risk.',
   'Description — Summarize what was observed and identify the affected asset.',
-  'Evidence — Record verified observations in poc. Put redacted request and response samples in requestResponse.',
+  `Evidence — ${evidenceGuidance}`,
   'Impact — Explain who or what is affected and under what conditions.',
   'Remediation — Give concrete fixes and a way to verify them.',
   'References — Put relevant links on separate lines. Omit fields that do not apply.',
@@ -45,10 +45,12 @@ export function createMcpEndpoint(store, { local }) {
   const maxRequestBodySize = 256 * 1024;
   const { statements, workspaceOwnerId } = store;
   const projectInput = local ? { projectId: projectIdSchema.optional() } : {};
-  const guidanceInput = local ? '{projectId} from list_projects' : '{}';
-  const instructions = local
-    ? 'Call list_projects to discover the workspace projects. Use a project ID from that list in report tools. Call list_templates with that projectId for project guidance and the default finding format.'
-    : 'Call list_templates with {} for project guidance and the default finding format. Browse or search the catalog when a template helps with the report.';
+  const guidanceInput = local ? '{projectId, guidanceOnly: true}' : '{guidanceOnly: true}';
+  const instructions = [
+    ...(local ? ['Call list_projects to discover workspace projects and use the selected projectId in report tools.'] : []),
+    `Call list_templates with ${guidanceInput} once per project in each reporting session to read project guidance and the default finding format.`,
+    'Browse or search the catalog when a template helps with the report.',
+  ].join(' ');
 
   const handler = createMcpHandler(({ authInfo }) => {
     const server = new McpServer({ name: 'peng', version: '1.0.0' }, { instructions });
@@ -85,9 +87,12 @@ export function createMcpEndpoint(store, { local }) {
     }
 
     server.registerTool('list_templates', {
-      description: `Use ${guidanceInput} for project guidance, the default finding format, and the first page of the catalog. Use limit and offset to browse, or filter by category or query.`,
+      description: `Use ${guidanceInput} to read project guidance and the default finding format without the catalog. By default, an unfiltered call includes the first catalog page. Use limit and offset to browse, or filter by category or query.`,
       inputSchema: z.strictObject({
         ...projectInput,
+        guidanceOnly: z.boolean().optional().describe(
+          'Return only project instructions and the default finding format. Catalog filters and pagination are ignored when true.',
+        ),
         query: queryInput,
         category: z.string().trim().min(1).max(120).optional(),
         limit: z.number().int().min(1).max(20).optional(),
@@ -97,14 +102,21 @@ export function createMcpEndpoint(store, { local }) {
         templateInstructions: z.string().optional(),
         hasGuidance: z.boolean().optional(),
         reportFormat: z.string().optional(),
-        templates: z.array(templateSummary),
-        catalogAvailable: z.boolean(),
-        ...pageInfo,
+        templates: z.array(templateSummary).optional(),
+        catalogAvailable: z.boolean().optional(),
+        hasMore: pageInfo.hasMore.optional(),
+        nextOffset: pageInfo.nextOffset,
       }),
       annotations: readOnly,
-    }, ({ projectId, query, category, limit, offset }) => {
+    }, ({ projectId, guidanceOnly, query, category, limit, offset }) => {
       const project = selectProject(projectId);
       if (project.error) return failure(project.error);
+      const templateInstructions = project.template_instructions ?? '';
+      const hasGuidance = templateInstructions.trim().length > 0;
+      const guidance = { templateInstructions, hasGuidance, reportFormat };
+      const guidanceText = `Project guidance\n${hasGuidance ? templateInstructions : 'No project-specific instructions.'}\n\nDefault finding format\n${reportFormat}`;
+      if (guidanceOnly) return result(guidance, guidanceText);
+
       const matches = catalogSummaries(query, category);
       const start = offset ?? 0;
       const pageSize = limit ?? 8;
@@ -117,10 +129,7 @@ export function createMcpEndpoint(store, { local }) {
         return result(page);
       }
 
-      const templateInstructions = project.template_instructions ?? '';
-      const hasGuidance = templateInstructions.trim().length > 0;
-      return result({ templateInstructions, hasGuidance, reportFormat, ...page },
-        `Project guidance\n${hasGuidance ? templateInstructions : 'No project-specific instructions.'}\n\nDefault finding format\n${reportFormat}\n\nTemplate catalog\n${JSON.stringify(page)}`);
+      return result({ ...guidance, ...page }, `${guidanceText}\n\nTemplate catalog\n${JSON.stringify(page)}`);
     });
 
     server.registerTool('get_template', {
@@ -151,7 +160,7 @@ export function createMcpEndpoint(store, { local }) {
     }
 
     server.registerTool('append_finding', {
-      description: `Append a report finding. Read project guidance first via list_templates with ${guidanceInput}. Supply a title or templateId. Explicit fields override template defaults. Submit plain text and separate paragraphs with blank lines. An identical retry returns the original findingId with created:false. Reusing its idempotencyKey for different content returns an error.`,
+      description: 'Append a report finding. Supply a title or templateId. Explicit fields override template defaults. Submit plain text and separate paragraphs with blank lines. An identical retry returns the original findingId with created:false. Reusing its idempotencyKey for different content returns an error.',
       inputSchema: appendInput.safeExtend(projectInput),
       outputSchema: appendOutcome,
       annotations: appendAnnotations,
@@ -164,7 +173,9 @@ export function createMcpEndpoint(store, { local }) {
       description: 'Append up to 25 report findings to one project. Each item takes the append_finding fields and its own idempotencyKey. Results are in input order and use zero-based indices.',
       inputSchema: z.strictObject({
         ...projectInput,
-        findings: z.array(z.unknown()).min(1).max(25).describe('Each item has the append_finding input shape, excluding projectId. Invalid items return an indexed error; valid items are committed independently.'),
+        findings: z.array(z.unknown()).min(1).max(25).describe(
+          `Use append_finding fields per item, excluding projectId. Invalid items return an indexed error. Valid items are committed independently. ${evidenceGuidance}`,
+        ),
       }),
       outputSchema: z.object({
         results: z.array(z.union([

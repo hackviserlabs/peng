@@ -42,6 +42,7 @@ async function reportTools(t, { local = true } = {}) {
     t.after(() => client.close());
     await client.connect(transport);
     return {
+      listTools: () => client.listTools(),
       tools: async () => (await client.listTools()).tools.map(({ name }) => name).sort(),
       call: (name, args = {}) => client.callTool({ name, arguments: args }),
     };
@@ -115,6 +116,32 @@ test('list_projects counts findings and list_findings pages compact results with
   toolError(await call('list_findings', { ...filter, offset: -1 }), /Invalid arguments/);
 });
 
+test('tools/list exposes concise evidence field guidance and the guidance-only option', async (t) => {
+  const { connect } = await reportTools(t);
+  const { listTools } = await connect();
+  const { tools } = await listTools();
+  const schemas = Object.fromEntries(tools.map(({ name, inputSchema }) => [name, inputSchema]));
+  const { poc, requestResponse } = schemas.append_finding.properties;
+  assert.match(poc.description, /observations, timing, and comparisons/);
+  assert.match(requestResponse.description, /only redacted, literal HTTP request or response excerpts/);
+  assert.match(requestResponse.description, /Omit when absent/);
+  assert.ok(!schemas.append_finding.required.includes('requestResponse'));
+
+  const patch = schemas.update_finding.properties.patch.properties;
+  assert.equal(patch.poc.description, poc.description);
+  assert.equal(patch.requestResponse.description, requestResponse.description);
+  const bulk = schemas.append_findings.properties.findings;
+  assert.ok(bulk.description.includes(`poc: ${poc.description}`));
+  assert.ok(bulk.description.includes(`requestResponse: ${requestResponse.description}`));
+  assert.deepEqual(bulk.items, {});
+
+  const { guidanceOnly } = schemas.list_templates.properties;
+  assert.equal(guidanceOnly.type, 'boolean');
+  assert.match(guidanceOnly.description, /only project instructions and the default finding format/);
+  assert.ok(!schemas.list_templates.required?.includes('guidanceOnly'));
+  assert.match(tools.find(({ name }) => name === 'list_templates').description, /guidanceOnly: true/);
+});
+
 test('catalog browsing has separate guidance, category pages, and plain template detail', async (t) => {
   const { connect, project } = await reportTools(t);
   project('primary');
@@ -125,6 +152,17 @@ test('catalog browsing has separate guidance, category pages, and plain template
   assert.ok(data(guidance).templates.length > 0);
   assert.match(guidance.content[0].text, /No project-specific instructions/);
   assert.equal(data(await call('list_templates', { projectId: 'guided' })).templateInstructions, 'Use concise titles.');
+
+  const guidanceOnly = await call('list_templates', { projectId: 'guided', guidanceOnly: true, limit: 1 });
+  assert.deepEqual(data(guidanceOnly), {
+    templateInstructions: 'Use concise titles.',
+    hasGuidance: true,
+    reportFormat: data(guidance).reportFormat,
+  });
+  assert.match(guidanceOnly.content[0].text, /Default finding format/);
+  assert.doesNotMatch(guidanceOnly.content[0].text, /Template catalog/);
+  assert.deepEqual(data(await call('list_templates', { projectId: 'primary', guidanceOnly: false })), data(guidance));
+  toolError(await call('list_templates', { projectId: 'unknown', guidanceOnly: true }), /Unknown project/);
 
   const browse = { projectId: 'primary', limit: 1 };
   const first = data(await call('list_templates', browse));
@@ -260,12 +298,16 @@ test('batch reports per-item errors and uses the historical append digest before
 test('organization manages only the key project and rechecks live access on every call', async (t) => {
   const { connect, project, keys, seedFinding } = await reportTools(t, { local: false });
   keys.set('manager', { ...project('primary'), access: 'manage' });
-  keys.set('writer', { ...project('other'), access: 'append' });
+  keys.set('writer', { ...project('other', 'Use concise titles.'), access: 'append' });
   seedFinding('primary', { id: 'here', title: 'Visible' });
   seedFinding('other', { id: 'elsewhere', title: 'Private' });
   const writer = await connect({ key: 'writer', access: 'append' });
   const manager = await connect({ key: 'manager', access: 'manage' });
   assert.deepEqual(await writer.tools(), ['append_finding', 'append_findings', 'get_template', 'list_templates']);
+  const guidance = data(await writer.call('list_templates', { guidanceOnly: true }));
+  assert.equal(guidance.templateInstructions, 'Use concise titles.');
+  assert.equal(guidance.templates, undefined);
+  toolError(await writer.call('list_templates', { guidanceOnly: true, projectId: 'primary' }), /Invalid arguments/);
   await assert.rejects(writer.call('list_findings'), /not found/);
   assert.deepEqual(await manager.tools(), [
     'append_finding', 'append_findings', 'get_finding', 'get_template', 'list_findings', 'list_templates', 'update_finding',
