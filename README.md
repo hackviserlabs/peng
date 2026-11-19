@@ -45,7 +45,7 @@ Most pentest report tools are either expensive SaaS platforms or clunky desktop 
 ### Installation
 
 ```bash
-git clone https://github.com/hackviserr/peng.git
+git clone https://github.com/IgorDuino/peng.git
 cd peng
 npm ci
 npm run dev
@@ -64,7 +64,7 @@ The production build will be in the `dist/` directory. You can deploy it to any 
 
 ## Docker Deployment
 
-Use Docker with the Compose plugin and a checkout that includes `server/`. Copy `.env.example` to `.env` and set `ADMIN_USERNAME` and `ADMIN_PASSWORD`. Then run:
+Use Docker with the Compose plugin. Copy `.env.example` to `.env` and set `ADMIN_USERNAME` and `ADMIN_PASSWORD`. Then run:
 
 ```bash
 docker compose up --build -d --wait
@@ -78,6 +78,16 @@ Keep `COOKIE_SECURE=false` for local HTTP. For HTTPS, point your TLS reverse pro
 The server image installs dependencies from `server/package-lock.json` and runs `npm start` on Node 24. The server binds to `0.0.0.0:3000` inside Compose and stores SQLite at `/data/peng.sqlite`.
 
 Compose uses the worktree directory name as the project name by default. Choose a distinct `COMPOSE_PROJECT_NAME` in each `.env` if directory names collide. Each project has its own `peng-data` volume. `docker compose down` preserves it, while `docker compose down -v` deletes it and the reports it holds.
+
+### Connect a reporting agent
+
+1. Open the project settings and enter the writing instructions you want the agent to follow.
+2. Under **MCP access**, create a named key for the agent and copy it while it is visible.
+3. Configure the client for Streamable HTTP using the displayed endpoint. Store the key in the client's secret store and send it in the `Authorization: Bearer <key>` header.
+4. Have the agent read the project instructions before submitting a finding. Reuse the same idempotency key when retrying a submission. Findings appear in the open editor after the next refresh.
+5. Revoke the key in the same settings panel when the agent no longer needs access.
+
+The browser workspace and the server keep separate data. To move a local report, export its JSON in the local app and import it into the signed-in workspace. The [backend reference](server/README.md) covers API routes, template discovery and MCP tool inputs.
 
 ## Usage
 
