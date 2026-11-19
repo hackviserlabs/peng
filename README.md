@@ -72,7 +72,7 @@ Both modes use the same `compose.yaml`. Run these steps from the repository root
    (umask 077; set -C; cat .env.example > .env)
    ```
 
-2. In `.env`, set `DEPLOY_MODE=local` for a trusted loopback workspace without sign-in, or `DEPLOY_MODE=organization` for signed-in access. Before the first organization startup on a volume, including when promoting a local workspace, set `ADMIN_USERNAME=admin` and set `ADMIN_PASSWORD` to a strong password generated with `openssl rand -hex 24`. Later organization startups use the account saved in the volume.
+2. In `.env`, set `DEPLOY_MODE=local` for a trusted loopback workspace without sign-in, or `DEPLOY_MODE=organization` for signed-in access. Before the first organization startup on a volume, including when promoting a local workspace, set `ADMIN_USERNAME=admin` and set `ADMIN_PASSWORD` to a strong password generated with `openssl rand -hex 24`. Later organization startups use the account saved in the volume. An existing installation with no `DEPLOY_MODE` set defaults to `organization`.
 3. Build and start the stack, then open the printed address in your browser. In organization mode, sign in with the bootstrapped account.
 
    ```bash
@@ -82,7 +82,7 @@ Both modes use the same `compose.yaml`. Run these steps from the repository root
 
 ### Switch modes or apply settings
 
-To switch an existing deployment, run `docker compose stop server`, then edit `DEPLOY_MODE` in your existing `.env`. Keep any existing credentials. If you are switching to organization mode for the first time on this volume, add the bootstrap credentials from step 2. Keep the same Compose project name so both modes use the same `peng-data` volume. Compose defaults the project name to the checkout directory. Avoid `docker compose down -v`, which deletes the volume.
+To switch an existing deployment, edit `DEPLOY_MODE` in your existing `.env`. Keep any existing credentials. If you are switching to organization mode for the first time on this volume, add the bootstrap credentials from step 2. Keep the same Compose project name so both modes use the same `peng-data` volume. Compose defaults the project name to the checkout directory. Avoid `docker compose down -v`, which deletes the volume.
 
 Apply `.env` changes with `docker compose up -d --wait`. Run `docker compose port web 8080` to check the address.
 
