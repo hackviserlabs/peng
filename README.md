@@ -64,44 +64,40 @@ The production build will be in the `dist/` directory. You can deploy it to any 
 
 ## Docker Deployment
 
-Run these commands from the repository root with Docker Compose. Each setup block creates a fresh `.env`. For an existing deployment, edit `.env` in place.
+Both modes use the same `compose.yaml`. Run these steps from the repository root.
 
-### Local workspace
+1. For a new deployment, create the gitignored `.env` from the example. The command refuses to overwrite an existing file.
 
-Use local mode on a trusted machine. Open the printed address in your browser to work without signing in.
+   ```bash
+   (umask 077; set -C; cat .env.example > .env)
+   ```
 
-```bash
-(umask 077; set -C; cat .env.example > .env) &&
-docker compose up --build -d --wait &&
-docker compose port web 8080
-```
+2. In `.env`, set `DEPLOY_MODE=local` for a trusted loopback workspace without sign-in, or `DEPLOY_MODE=organization` for signed-in access. Before the first organization startup on a volume, including when promoting a local workspace, set `ADMIN_USERNAME=admin` and set `ADMIN_PASSWORD` to a strong password generated with `openssl rand -hex 24`. Later organization startups use the account saved in the volume.
+3. Build and start the stack, then open the printed address in your browser. In organization mode, sign in with the bootstrapped account.
 
-Connect a reporting agent over Streamable HTTP at `http://<printed-address>/mcp`. Call `list_projects` to find the project's ID, then pass it as `projectId` to `list_templates`, `get_template`, and `append_finding`.
+   ```bash
+   docker compose up --build -d --wait &&
+   docker compose port web 8080
+   ```
 
-### Organization workspace
+### Switch modes or apply settings
 
-Use organization mode for signed-in access. Sign in at the printed address over HTTP as `admin` with the generated password saved in `.env`.
+To switch an existing deployment, run `docker compose stop server`, then edit `DEPLOY_MODE` in your existing `.env`. Keep any existing credentials. If you are switching to organization mode for the first time on this volume, add the bootstrap credentials from step 2. Keep the same Compose project name so both modes use the same `peng-data` volume. Compose defaults the project name to the checkout directory. Avoid `docker compose down -v`, which deletes the volume.
 
-```bash
-(umask 077
- set -C
- password="$(openssl rand -hex 24)" &&
- printf 'DEPLOY_MODE=organization\nADMIN_USERNAME=admin\nADMIN_PASSWORD=%s\n' "$password" > .env) &&
-docker compose up --build -d --wait &&
-docker compose port web 8080
-```
+Apply `.env` changes with `docker compose up -d --wait`. Run `docker compose port web 8080` to check the address.
 
-Organization mode is the default when `DEPLOY_MODE` is unset. Its first startup requires a username and a strong password, including when converting a local workspace. After bootstrap it uses the saved account.
+### Connect an MCP client
 
-For HTTPS, point your TLS reverse proxy at a fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `APP_ORIGIN=https://your-public-host` and `COOKIE_SECURE=true` in `.env` and rerun `docker compose up -d --wait`.
+Both modes use Streamable HTTP.
 
-In your project settings, create a named key under **MCP access** and copy it while it is visible. Configure the client for Streamable HTTP using the displayed endpoint and the `Authorization: Bearer <key>` header. The key selects the project. Start with `list_templates` using `{}` and revoke the key in project settings when the agent's work is done.
+- **Local.** Connect to `http://<printed-address>/mcp` without a key. Call `list_projects` to find the project's ID, then pass it as `projectId` to `list_templates`, `get_template`, and `append_finding`.
+- **Organization.** Create a named key under **MCP access** in project settings and copy it while it is visible. Use the displayed endpoint and send `Authorization: Bearer <key>`. The key selects the project, so start with `list_templates` using `{}`. Revoke the key when the agent's work is done.
 
-### Ports and data
+### Ports and HTTPS
 
-Both modes publish nginx on `127.0.0.1` with `PENG_PORT=0` by default, which picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed address. nginx serves the frontend and proxies `/api/`, `/mcp`, and `/healthz`. Keep local mode on loopback.
+Compose publishes nginx on `127.0.0.1`. The default `PENG_PORT=0` picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed port. Keep local mode on loopback.
 
-Both modes use the same `peng-data` SQLite volume for a given Compose project. Keep the Compose project name when switching modes to keep your reports. Compose derives the project name from the checkout directory by default. Set a distinct `COMPOSE_PROJECT_NAME` if directory names collide. `docker compose down` preserves the volume. `docker compose down -v` deletes it.
+For organization mode over HTTPS, point your TLS reverse proxy at the fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `APP_ORIGIN=https://your-public-host` and `COOKIE_SECURE=true` in `.env`, then run `docker compose up -d --wait`.
 
 Set writing instructions in project settings and have the agent read them with `list_templates` before submitting a finding. Reuse the same idempotency key when retrying. Findings appear in the open editor after the next refresh. To move reports from the static browser workspace to Docker, export JSON from the static app and import it in Docker. See the [backend reference](server/README.md) for API and MCP tool inputs.
 
