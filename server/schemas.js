@@ -4,7 +4,7 @@ export const username = z.string().min(1).max(120);
 export const password = z.string().min(1).max(1024);
 export const severity = z.enum(['Critical', 'High', 'Medium', 'Low', 'Info']);
 
-const id = z.string().min(1).max(255);
+export const id = z.string().min(1).max(255);
 const string = z.string();
 
 export const credentials = z.strictObject({ username, password });
