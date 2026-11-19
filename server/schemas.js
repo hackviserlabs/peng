@@ -6,9 +6,14 @@ export const severity = z.enum(['Critical', 'High', 'Medium', 'Low', 'Info']);
 
 export const id = z.string().min(1).max(255);
 const string = z.string();
+const text = z.string().max(24_000);
+const metadata = z.string().max(2_048);
 
 export const credentials = z.strictObject({ username, password });
-export const keyRequest = z.strictObject({ name: z.string().trim().min(1).max(120) });
+export const keyRequest = z.strictObject({
+  name: z.string().trim().min(1).max(120),
+  access: z.enum(['append', 'manage']).default('append'),
+});
 
 export const project = z.strictObject({
   id,
@@ -27,12 +32,22 @@ export const project = z.strictObject({
   templateInstructions: z.string().max(16_384).optional(),
 });
 
+export const findingStatus = z.enum(['New', 'Open', 'Verified', 'False Positive', 'Duplicate', 'Accepted Risk', 'Fixed']);
+export const findingConfidence = z.enum(['high', 'medium', 'low']);
+export const findingTarget = z.strictObject({
+  url: metadata,
+  method: metadata.optional(),
+  parameter: metadata.optional(),
+  host: metadata.optional(),
+  port: metadata.optional(),
+});
+
 export const finding = z.strictObject({
   id,
   projectId: id,
   title: string,
   severity,
-  status: z.enum(['Open', 'Fixed', 'Accepted Risk']),
+  status: findingStatus,
   url: string,
   method: string,
   parameter: string,
@@ -50,4 +65,11 @@ export const finding = z.strictObject({
   remediation: string,
   notes: string,
   createdAt: string,
+  confidence: findingConfidence.optional(),
+  triageNotes: text.optional(),
+  evidence: z.array(metadata).max(100).optional(),
+  targets: z.array(findingTarget).max(100).optional(),
+  templateId: metadata.optional(),
+  category: metadata.optional(),
+  tags: z.array(metadata).max(100).optional(),
 });

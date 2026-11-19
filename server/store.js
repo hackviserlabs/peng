@@ -63,6 +63,7 @@ export function openStore(path, { local, username, password }) {
         name TEXT NOT NULL,
         created_at TEXT NOT NULL,
         digest TEXT NOT NULL UNIQUE,
+        access TEXT NOT NULL DEFAULT 'append' CHECK (access IN ('append', 'manage')),
         PRIMARY KEY (owner_id, project_id, id),
         FOREIGN KEY (owner_id, project_id) REFERENCES projects(owner_id, id) ON DELETE CASCADE
       );
@@ -78,6 +79,9 @@ export function openStore(path, { local, username, password }) {
     `);
 
     workspaceOwnerId = db.transaction(() => {
+      if (!db.pragma('table_info(mcp_keys)').some(({ name }) => name === 'access')) {
+        db.exec("ALTER TABLE mcp_keys ADD COLUMN access TEXT NOT NULL DEFAULT 'append' CHECK (access IN ('append', 'manage'))");
+      }
       let owner = db.prepare(`
         SELECT users.id, users.username FROM local_workspace
         JOIN users ON users.id = local_workspace.owner_id WHERE singleton = 1
@@ -135,24 +139,25 @@ export function openStore(path, { local, username, password }) {
     `),
     deleteProject: db.prepare('DELETE FROM projects WHERE owner_id = ? AND id = ?'),
     findings: db.prepare('SELECT data FROM findings WHERE owner_id = ? AND project_id = ?'),
+    // Older clients omit optional finding fields when saving.
     putFinding: db.prepare(`
       INSERT INTO findings (owner_id, project_id, id, data)
       SELECT owner_id, id, ?, ? FROM projects WHERE owner_id = ? AND id = ?
-      ON CONFLICT (owner_id, project_id, id) DO UPDATE SET data = excluded.data
+      ON CONFLICT (owner_id, project_id, id) DO UPDATE SET data = json_patch(findings.data, excluded.data)
     `),
     deleteFinding: db.prepare('DELETE FROM findings WHERE owner_id = ? AND project_id = ? AND id = ?'),
     insertFinding: db.prepare('INSERT INTO findings (owner_id, project_id, id, data) VALUES (?, ?, ?, ?)'),
     keys: db.prepare(`
-      SELECT id, name, created_at AS createdAt FROM mcp_keys
+      SELECT id, name, created_at AS createdAt, access FROM mcp_keys
       WHERE owner_id = ? AND project_id = ? ORDER BY created_at, id
     `),
     insertKey: db.prepare(`
-      INSERT INTO mcp_keys (owner_id, project_id, id, name, created_at, digest)
-      SELECT owner_id, id, ?, ?, ?, ? FROM projects WHERE owner_id = ? AND id = ?
+      INSERT INTO mcp_keys (owner_id, project_id, id, name, created_at, digest, access)
+      SELECT owner_id, id, ?, ?, ?, ?, ? FROM projects WHERE owner_id = ? AND id = ?
     `),
     deleteKey: db.prepare('DELETE FROM mcp_keys WHERE owner_id = ? AND project_id = ? AND id = ?'),
     mcpProject: db.prepare(`
-      SELECT projects.owner_id, projects.id, projects.template_instructions, mcp_keys.id AS key_id
+      SELECT projects.owner_id, projects.id, projects.template_instructions, mcp_keys.id AS key_id, mcp_keys.access
       FROM mcp_keys JOIN projects
         ON projects.owner_id = mcp_keys.owner_id AND projects.id = mcp_keys.project_id
       WHERE mcp_keys.digest = ?
