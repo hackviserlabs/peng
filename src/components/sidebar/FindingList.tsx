@@ -1,13 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { MoreHorizontal, Copy, Trash2 } from 'lucide-react';
-import { SEVERITY_COLORS } from '../../constants';
-import type { Finding } from '../../types';
-
-const STATUS_STYLE: Record<string, string> = {
-    'Open': 'bg-zinc-500/10 text-zinc-400',
-    'Fixed': 'bg-green-500/10 text-green-400',
-    'Accepted Risk': 'bg-yellow-500/10 text-yellow-400',
-};
+import { FINDING_STATUS_COLORS, SEVERITY_COLORS } from '../../constants';
+import { findingStatusLabel, type Finding } from '../../types';
 
 interface FindingListProps {
     findings: Finding[];
@@ -92,16 +86,17 @@ export default function FindingList({
                             </div>
                         )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    {f.category && <p className="mb-2 text-xs text-zinc-400 break-words">{f.category}</p>}
+                    <div className="flex flex-wrap items-center gap-2">
                         <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${SEVERITY_COLORS[f.severity].bg} ${SEVERITY_COLORS[f.severity].text}`}
                         >
                             {f.severity}
                         </span>
                         <span
-                            className={`text-[10px] font-medium px-2 py-0.5 rounded ${STATUS_STYLE[f.status] || STATUS_STYLE['Open']}`}
+                            className={`text-[10px] font-medium px-2 py-0.5 rounded ${FINDING_STATUS_COLORS[f.status]}`}
                         >
-                            {f.status}
+                            {findingStatusLabel(f.status)}
                         </span>
                     </div>
                 </div>

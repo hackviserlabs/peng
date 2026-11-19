@@ -1,6 +1,6 @@
 import { sanitizeRichText } from '../../lib/richText';
 import type { ReportData } from '../reportTypes';
-import type { Severity } from '../../types';
+import { FINDING_STATUSES, findingStatusLabel, type Severity } from '../../types';
 
 const SEV_COLORS: Record<Severity, string> = {
     Critical: '#ef4444', High: '#f97316', Medium: '#eab308', Low: '#3b82f6', Info: '#9ca3af',
@@ -59,15 +59,29 @@ export function ExecutiveSummary({ data }: { data: ReportData }) {
                 </tfoot>
             </table>
 
-            {/* Status breakdown */}
-            <div className="flex gap-8 text-sm">
-                {Object.entries(stats.byStatus).map(([status, count]) => (
-                    <div key={status}>
-                        <span className="text-gray-500">{status}: </span>
-                        <span className="font-bold">{count}</span>
+            <h3 className="text-xl font-bold mb-3">By Status</h3>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                {FINDING_STATUSES.map(status => (
+                    <div key={status} className="flex justify-between gap-2 border-b border-gray-100">
+                        <dt>{findingStatusLabel(status)}</dt>
+                        <dd className="font-bold">{stats.byStatus[status]}</dd>
                     </div>
                 ))}
-            </div>
+            </dl>
+
+            {stats.total > (stats.byCategory.get('') ?? 0) && (
+                <>
+                    <h3 className="text-xl font-bold mt-6 mb-3">By Category</h3>
+                    <dl className="text-sm">
+                        {[...stats.byCategory].sort(([a], [b]) => a.localeCompare(b)).map(([category, count]) => (
+                            <div key={category} className="flex justify-between gap-4 border-b border-gray-100 py-1">
+                                <dt className="wrap-anywhere">{category || 'Uncategorized'}</dt>
+                                <dd className="font-bold">{count}</dd>
+                            </div>
+                        ))}
+                    </dl>
+                </>
+            )}
         </div>
     );
 }

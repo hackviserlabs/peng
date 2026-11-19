@@ -38,7 +38,7 @@ export default function SidebarHeader({
                     <button
                         onClick={onExport}
                         className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors"
-                        title="Export Project"
+                        title="Export project backup (includes internal notes)"
                     >
                         <Download className="w-4 h-4" />
                     </button>

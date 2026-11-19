@@ -1,6 +1,13 @@
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info';
 export type Classification = 'Confidential' | 'Internal' | 'Public';
-export type FindingStatus = 'Open' | 'Fixed' | 'Accepted Risk';
+export const FINDING_STATUSES = ['New', 'Open', 'Verified', 'False Positive', 'Duplicate', 'Accepted Risk', 'Fixed'] as const;
+export type FindingStatus = typeof FINDING_STATUSES[number];
+export const FINDING_CONFIDENCES = ['high', 'medium', 'low'] as const;
+export type FindingConfidence = typeof FINDING_CONFIDENCES[number];
+
+export function findingStatusLabel(status: FindingStatus): string {
+    return status === 'Open' ? 'Open (legacy)' : status;
+}
 const SCOPE_TYPES = ['Web App', 'API', 'Network', 'Mobile', 'Other'] as const;
 export type ScopeType = typeof SCOPE_TYPES[number];
 
@@ -63,12 +70,29 @@ export interface Project {
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'OPTIONS' | 'HEAD';
 
+export interface FindingTarget {
+    url: string;
+    method?: string;
+    parameter?: string;
+    host?: string;
+    port?: string;
+}
+
+export const FINDING_TARGET_FIELDS = ['url', 'method', 'parameter', 'host', 'port'] as const;
+
 export interface Finding {
     id: string;
     projectId: string;
     title: string;
     severity: Severity;
     status: FindingStatus;
+    confidence?: FindingConfidence;
+    triageNotes?: string;
+    evidence?: string[];
+    targets?: FindingTarget[];
+    templateId?: string;
+    category?: string;
+    tags?: string[];
     // Metadata properties
     url: string;
     method: string;
@@ -89,6 +113,8 @@ export interface Finding {
     notes: string;
     createdAt: string;
 }
+
+export type UpdateFindingField = <K extends keyof Finding>(field: K, value: Finding[K]) => void;
 
 export interface SeverityColor {
     bg: string;
@@ -124,7 +150,7 @@ export function createDefaultFinding(projectId: string): Finding {
         projectId,
         title: '',
         severity: 'Medium',
-        status: 'Open',
+        status: 'New',
         url: '',
         method: '',
         parameter: '',
