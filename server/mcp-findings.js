@@ -27,10 +27,17 @@ const target = z.strictObject({
 });
 
 export const templateId = z.string().trim().min(1).max(120);
+const evidenceFields = {
+  poc: 'Record verified observations, timing, and comparisons here.',
+  requestResponse: 'Optional. Include only redacted, literal HTTP request or response excerpts. Omit when absent.',
+};
+export const evidenceGuidance = Object.entries(evidenceFields)
+  .map(([field, guidance]) => `${field}: ${guidance}`).join(' ');
+
 const reportFields = {
   description: text,
-  poc: text,
-  requestResponse: text,
+  poc: text.describe(evidenceFields.poc),
+  requestResponse: text.describe(evidenceFields.requestResponse),
   impact: text,
   remediation: text,
   notes: text,
