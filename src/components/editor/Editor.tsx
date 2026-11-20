@@ -7,6 +7,7 @@ import ContentBlock from './ContentBlock';
 import { FindingDetail } from '../../templates/default/FindingDetail';
 import { toReportFinding } from '../../templates/reportTypes';
 import type { Finding, Severity, UpdateFindingField } from '../../types';
+import type { CustomFindingStatus } from '../../types/findingStatus';
 import CvssCalculatorModal from './CvssCalculatorModal';
 
 const OPTIONAL_SECTIONS = [
@@ -20,12 +21,13 @@ type SectionKey = typeof OPTIONAL_SECTIONS[number]['key'];
 
 interface EditorProps {
     selectedFinding: Finding | null;
+    customStatuses?: readonly CustomFindingStatus[];
     onUpdateField: UpdateFindingField;
     onDelete: (id: string) => void;
     onDuplicate: (id: string) => void;
 }
 
-export default function Editor({ selectedFinding, onUpdateField, onDelete, onDuplicate }: EditorProps) {
+export default function Editor({ selectedFinding, customStatuses, onUpdateField, onDelete, onDuplicate }: EditorProps) {
     const [visibleSections, setVisibleSections] = useState(() =>
         new Set(OPTIONAL_SECTIONS.filter(({ key }) => selectedFinding?.[key]).map(({ key }) => key)));
     const [cvssModalOpen, setCvssModalOpen] = useState(false);
@@ -63,6 +65,7 @@ export default function Editor({ selectedFinding, onUpdateField, onDelete, onDup
                         <div className="max-w-4xl mx-auto px-12 py-16 print:p-0 print:max-w-none">
                             <FindingTitle
                                 finding={selectedFinding}
+                                customStatuses={customStatuses}
                                 onUpdate={onUpdateField}
                                 onOpenCvssCalculator={() => setCvssModalOpen(true)}
                             />
@@ -162,11 +165,11 @@ export default function Editor({ selectedFinding, onUpdateField, onDelete, onDup
                 </div>
             )}
 
-            {selectedFinding && (
+            {selectedFinding && cvssModalOpen && (
                 <CvssCalculatorModal
-                    open={cvssModalOpen}
                     onClose={() => setCvssModalOpen(false)}
-                    initialVector={selectedFinding.cvssVector ?? ''}
+                    savedScore={selectedFinding.cvss}
+                    initialVector={selectedFinding.cvssVector}
                     onApply={({ score, severity, vector, applySeverity }) => {
                         onUpdateField('cvss', score);
                         onUpdateField('cvssVector', vector);

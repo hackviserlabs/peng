@@ -1,10 +1,13 @@
 import { useState, useRef, useEffect } from 'react';
 import { MoreHorizontal, Copy, Trash2 } from 'lucide-react';
-import { FINDING_STATUS_COLORS, SEVERITY_COLORS } from '../../constants';
-import { findingStatusLabel, type Finding } from '../../types';
+import { SEVERITY_COLORS } from '../../constants';
+import type { Finding } from '../../types';
+import FindingStatusBadge from '../ui/FindingStatusBadge';
+import type { CustomFindingStatus } from '../../types/findingStatus';
 
 interface FindingListProps {
     findings: Finding[];
+    customStatuses?: readonly CustomFindingStatus[];
     selectedFindingId: string | null;
     onSelectFinding: (id: string) => void;
     onDeleteFinding: (id: string) => void;
@@ -13,6 +16,7 @@ interface FindingListProps {
 
 export default function FindingList({
     findings,
+    customStatuses,
     selectedFindingId,
     onSelectFinding,
     onDeleteFinding,
@@ -93,11 +97,7 @@ export default function FindingList({
                         >
                             {f.severity}
                         </span>
-                        <span
-                            className={`text-[10px] font-medium px-2 py-0.5 rounded ${FINDING_STATUS_COLORS[f.status]}`}
-                        >
-                            {findingStatusLabel(f.status)}
-                        </span>
+                        <FindingStatusBadge status={f.status} customStatuses={customStatuses} />
                     </div>
                 </div>
             ))}

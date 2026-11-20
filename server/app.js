@@ -3,6 +3,7 @@ import { isIPv4 } from 'node:net';
 import { promisify } from 'node:util';
 import { parseCookie } from 'cookie';
 import express from 'express';
+import { normalizeWorkspaceId } from '../src/types/findingLink.ts';
 import { createLoginLimiter } from './login-limiter.js';
 import { createMcpEndpoint } from './mcp.js';
 import * as schemas from './schemas.js';
@@ -158,10 +159,16 @@ export function createApp({
     }));
   });
 
+  api.param('id', (req, _res, next, id) => {
+    req.params.id = normalizeWorkspaceId(id);
+    next();
+  });
+
   api.put('/projects/:id', apiJson, (req, res) => {
     const parsed = schemas.project.safeParse(req.body);
-    if (!parsed.success || parsed.data.id !== req.params.id) return invalidBody(res);
-    const { id, templateInstructions, ...data } = parsed.data;
+    if (!parsed.success || normalizeWorkspaceId(parsed.data.id) !== req.params.id) return invalidBody(res);
+    const { templateInstructions, ...data } = parsed.data;
+    const { id } = req.params;
     statements.putProject.run(req.user.id, id, JSON.stringify({ id, ...data }), templateInstructions ?? null);
     res.status(204).end();
   });
@@ -175,7 +182,14 @@ export function createApp({
   api.use('/projects/:id', project);
   if (local) project.use('/keys', (_req, res) => notFound(res));
   project.use((req, res, next) => {
-    if (!statements.project.get(req.user.id, req.params.id)) return notFound(res);
+    const row = statements.project.get(req.user.id, req.params.id);
+    if (!row) return notFound(res);
+    res.locals.projectData = row.data;
+    next();
+  });
+
+  project.param('findingId', (req, _res, next, id) => {
+    req.params.findingId = normalizeWorkspaceId(id);
     next();
   });
 
@@ -186,8 +200,10 @@ export function createApp({
   project.put('/findings/:findingId', apiJson, (req, res) => {
     const { id, findingId } = req.params;
     const parsed = schemas.finding.safeParse(req.body);
-    if (!parsed.success || parsed.data.id !== findingId || parsed.data.projectId !== id) return invalidBody(res);
-    const inserted = statements.putFinding.run({ data: JSON.stringify(parsed.data) }, findingId, req.user.id, id);
+    if (!parsed.success || normalizeWorkspaceId(parsed.data.id) !== findingId
+      || normalizeWorkspaceId(parsed.data.projectId) !== id
+      || !schemas.isProjectFindingStatus(parsed.data.status, res.locals.projectData)) return invalidBody(res);
+    const inserted = statements.putFinding.run({ data: JSON.stringify({ ...parsed.data, id: findingId, projectId: id }) }, findingId, req.user.id, id);
     if (!inserted.changes) return notFound(res);
     res.status(204).end();
   });

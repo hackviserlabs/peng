@@ -1,7 +1,9 @@
+import { createWorkspaceId } from './findingLink';
+import type { CustomFindingStatus } from './findingStatus';
+
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info';
 export type Classification = 'Confidential' | 'Internal' | 'Public';
-export const FINDING_STATUSES = ['New', 'Open', 'Verified', 'False Positive', 'Duplicate', 'Accepted Risk', 'Fixed'] as const;
-export type FindingStatus = typeof FINDING_STATUSES[number];
+export type FindingStatus = string;
 export const FINDING_CONFIDENCES = ['high', 'medium', 'low'] as const;
 export type FindingConfidence = typeof FINDING_CONFIDENCES[number];
 
@@ -64,6 +66,7 @@ export interface Project {
     scope: string;
     executiveSummary: string;
     templateInstructions?: string;
+    customFindingStatuses?: CustomFindingStatus[];
     createdAt: string;
     updatedAt: string;
 }
@@ -128,7 +131,7 @@ export type SeverityColorMap = Record<Severity, SeverityColor>;
 export function createDefaultProject(name: string): Project {
     const now = new Date().toISOString();
     return {
-        id: crypto.randomUUID(),
+        id: createWorkspaceId(),
         name,
         clientName: '',
         assessorName: '',
@@ -146,7 +149,7 @@ export function createDefaultProject(name: string): Project {
 
 export function createDefaultFinding(projectId: string): Finding {
     return {
-        id: crypto.randomUUID(),
+        id: createWorkspaceId(),
         projectId,
         title: '',
         severity: 'Medium',

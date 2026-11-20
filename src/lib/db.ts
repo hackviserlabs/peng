@@ -1,5 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from 'idb';
 import type { Finding, Project } from '../types';
+import { normalizeWorkspaceId } from '../types/findingLink';
 
 interface PengDB extends DBSchema {
     projects: {
@@ -14,7 +15,7 @@ interface PengDB extends DBSchema {
 }
 
 const DB_NAME = 'peng-db';
-const DB_VERSION = 3;
+const DB_VERSION = 4;
 
 let dbPromise: Promise<IDBPDatabase<PengDB>> | null = null;
 
@@ -31,6 +32,31 @@ function getDB() {
                 if (!db.objectStoreNames.contains('projects')) {
                     db.createObjectStore('projects', { keyPath: 'id' });
                 }
+                const projects = transaction.objectStore('projects');
+                void (async () => {
+                    for (const project of await projects.getAll()) {
+                        const id = normalizeWorkspaceId(project.id);
+                        if (id === project.id) continue;
+                        await projects.add({ ...project, id });
+                        await projects.delete(project.id);
+                    }
+                    for (const finding of await findings.getAll()) {
+                        const id = normalizeWorkspaceId(finding.id);
+                        const projectId = normalizeWorkspaceId(finding.projectId);
+                        if (id !== finding.id) {
+                            await findings.add({ ...finding, id, projectId });
+                            await findings.delete(finding.id);
+                        } else if (projectId !== finding.projectId) {
+                            await findings.put({ ...finding, projectId });
+                        }
+                    }
+                })().catch(() => {
+                    try {
+                        transaction.abort();
+                    } catch {
+                        // A failed request may already have aborted the upgrade.
+                    }
+                });
             },
         }).catch(error => {
             dbPromise = null;

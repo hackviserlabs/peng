@@ -1,6 +1,6 @@
 import { sanitizeRichText } from '../../lib/richText';
 import type { ReportData } from '../reportTypes';
-import { FINDING_STATUSES, findingStatusLabel, type Severity } from '../../types';
+import { findingStatusLabel, type Severity } from '../../types';
 
 const SEV_COLORS: Record<Severity, string> = {
     Critical: '#ef4444', High: '#f97316', Medium: '#eab308', Low: '#3b82f6', Info: '#9ca3af',
@@ -61,10 +61,10 @@ export function ExecutiveSummary({ data }: { data: ReportData }) {
 
             <h3 className="text-xl font-bold mb-3">By Status</h3>
             <dl className="grid grid-cols-2 gap-x-6 gap-y-2 text-sm">
-                {FINDING_STATUSES.map(status => (
+                {Object.entries(stats.byStatus).map(([status, count]) => (
                     <div key={status} className="flex justify-between gap-2 border-b border-gray-100">
                         <dt>{findingStatusLabel(status)}</dt>
-                        <dd className="font-bold">{stats.byStatus[status]}</dd>
+                        <dd className="font-bold">{count}</dd>
                     </div>
                 ))}
             </dl>

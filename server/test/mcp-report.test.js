@@ -4,6 +4,7 @@ import { once } from 'node:events';
 import { test } from 'node:test';
 import { Client, StreamableHTTPClientTransport } from '@modelcontextprotocol/client';
 import express from 'express';
+import { workspacePath } from '../../src/types/findingLink.ts';
 import { createDefaultFinding } from '../../src/types/index.ts';
 import { createMcpEndpoint } from '../mcp.js';
 import { openStore } from '../store.js';
@@ -215,8 +216,11 @@ test('catalog browsing has separate guidance, category pages, and plain template
 });
 
 test('update_finding validates a strict patch, preserves other fields, and stores evidence as metadata', async (t) => {
-  const { connect, project, seedFinding } = await reportTools(t);
-  project('primary');
+  const { connect, project, seedFinding, statements } = await reportTools(t);
+  const primary = project('primary');
+  statements.putProject.run(primary.owner_id, primary.id, JSON.stringify({
+    id: primary.id, name: 'Primary', customFindingStatuses: [{ name: 'Ready', color: '#34d399' }],
+  }), null);
   project('other');
   const original = seedFinding('primary', {
     id: 'legacy', title: 'Original title', status: 'Open', description: '<p>Original</p>',
@@ -249,6 +253,16 @@ test('update_finding validates a strict patch, preserves other fields, and store
   const destination = { projectId: 'other', id: original.id };
   toolError(await call('get_finding', destination), /Unknown finding ID/);
   toolError(await call('update_finding', { ...destination, patch: { status: 'Fixed' } }), /Unknown finding ID/);
+  assert.equal(data(await update({ status: 'Ready' })).updated, true);
+  assert.equal((await get()).status, 'Ready');
+  const ready = data(await call('list_findings', { projectId: 'primary', status: 'Ready' })).findings;
+  assert.deepEqual(ready.map(({ id }) => id), [original.id]);
+  assert.equal(data(await call('append_finding', {
+    projectId: 'primary', title: 'Ready to send', status: 'Ready', idempotencyKey: 'ready-1',
+  })).created, true);
+  toolError(await call('append_finding', {
+    projectId: 'other', title: 'Another finding', status: 'Ready', idempotencyKey: 'ready-1',
+  }), /unknown finding status/);
 });
 
 test('batch reports per-item errors and uses the historical append digest before and after edits', async (t) => {
@@ -295,12 +309,49 @@ test('batch reports per-item errors and uses the historical append digest before
   toolError(await call('append_finding', { idempotencyKey: 'missing-title' }), /Provide a title or a templateId/);
 });
 
+test('get_finding resolves compact UUIDs, arbitrary IDs and legacy links', async (t) => {
+  const { connect, project, seedFinding } = await reportTools(t);
+  const { call } = await connect();
+  project('primary & QA');
+  project('other');
+  const finding = seedFinding('primary & QA', { id: 'card/1 + 2', title: 'Shared finding' });
+  seedFinding('other', { id: finding.id, title: 'Different finding' });
+  const url = 'https://peng.example/workspace/?project=primary+%26+QA&finding=card%2F1+%2B+2';
+
+  assert.deepEqual(data(await call('get_finding', { url })).finding, finding);
+  const arbitraryIdsUrl = 'https://peng.example' + workspacePath(finding.projectId, finding.id);
+  assert.deepEqual(data(await call('get_finding', { url: arbitraryIdsUrl })).finding, finding);
+
+  const projectId = 'ABEiM0RVZneImaq7zN3u_w';
+  const findingId = '_-7dzLuqmYh3ZlVEMyIRAA';
+  project(projectId);
+  const compactFinding = seedFinding(projectId, { id: findingId });
+  const path = workspacePath(projectId, compactFinding.id);
+  assert.equal(path, '/ABEiM0RVZneImaq7zN3u_w/_-7dzLuqmYh3ZlVEMyIRAA');
+  assert.deepEqual(data(await call('get_finding', { url: 'https://peng.example' + path })).finding, compactFinding);
+  assert.deepEqual(data(await call('get_finding', { projectId, id: path.split('/')[2] })).finding, compactFinding);
+  const legacyIds = { projectId: '00112233-4455-6677-8899-aabbccddeeff', id: 'ffeeddcc-bbaa-9988-7766-554433221100' };
+  assert.deepEqual(data(await call('get_finding', legacyIds)).finding, compactFinding);
+  assert.deepEqual(data(await call('update_finding', { projectId, id: findingId, patch: { title: 'Updated' } })), {
+    findingId, updated: true,
+  });
+  assert.deepEqual(data(await call('update_finding', { ...legacyIds, patch: { title: 'Updated again' } })), {
+    findingId, updated: true,
+  });
+  toolError(await call('get_finding', { url: 'https://peng.example' + path.slice(0, -1) + 'B' }), /Invalid Peng finding link/);
+  toolError(await call('get_finding', { url: 'https://peng.example' + workspacePath(projectId, null, true) }), /Invalid Peng finding link/);
+  toolError(await call('get_finding', { url, id: finding.id }), /Supply either/);
+  toolError(await call('get_finding', { url: 'https://peng.example/?project=other' }), /Invalid Peng finding link/);
+  toolError(await call('get_finding', { url: 'https://peng.example/?project=missing&finding=card' }), /Unknown project ID/);
+});
+
 test('organization manages only the key project and rechecks live access on every call', async (t) => {
   const { connect, project, keys, seedFinding } = await reportTools(t, { local: false });
   keys.set('manager', { ...project('primary'), access: 'manage' });
   keys.set('writer', { ...project('other', 'Use concise titles.'), access: 'append' });
   seedFinding('primary', { id: 'here', title: 'Visible' });
   seedFinding('other', { id: 'elsewhere', title: 'Private' });
+  const url = 'https://peng.example' + workspacePath('primary', 'here');
   const writer = await connect({ key: 'writer', access: 'append' });
   const manager = await connect({ key: 'manager', access: 'manage' });
   assert.deepEqual(await writer.tools(), ['append_finding', 'append_findings', 'get_template', 'list_templates']);
@@ -309,12 +360,15 @@ test('organization manages only the key project and rechecks live access on ever
   assert.equal(guidance.templates, undefined);
   toolError(await writer.call('list_templates', { guidanceOnly: true, projectId: 'primary' }), /Invalid arguments/);
   await assert.rejects(writer.call('list_findings'), /not found/);
+  await assert.rejects(writer.call('get_finding', { url }), /not found/);
   assert.deepEqual(await manager.tools(), [
     'append_finding', 'append_findings', 'get_finding', 'get_template', 'list_findings', 'list_templates', 'update_finding',
   ]);
   assert.deepEqual(data(await manager.call('list_findings')).findings.map(({ id }) => id), ['here']);
   toolError(await manager.call('list_findings', { projectId: 'other' }), /Invalid arguments/);
   toolError(await manager.call('get_finding', { id: 'elsewhere' }), /Unknown finding ID/);
+  assert.equal(data(await manager.call('get_finding', { url })).finding.id, 'here');
+  toolError(await manager.call('get_finding', { url: 'https://peng.example' + workspacePath('other', 'here') }), /different project/);
   toolError(await manager.call('update_finding', { id: 'elsewhere', patch: { status: 'Fixed' } }), /Unknown finding ID/);
   data(await manager.call('update_finding', { id: 'here', patch: { status: 'Fixed' } }));
 

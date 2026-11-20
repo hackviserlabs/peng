@@ -2,6 +2,7 @@ import { createHash, randomBytes, scryptSync } from 'node:crypto';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import Database from 'better-sqlite3';
+import { normalizeWorkspaceId } from '../src/types/findingLink.ts';
 import { prepareMcpReportStatements } from './mcp-report-statements.js';
 
 const sessionDuration = 7 * 24 * 60 * 60 * 1000;
@@ -16,6 +17,24 @@ const weakBootstrapPasswords = new Set([
 
 export function digest(value) {
   return createHash('sha256').update(value).digest('hex');
+}
+
+function migrateWorkspaceIds(db) {
+  if (db.pragma('user_version', { simple: true }) >= 1) return;
+  db.function('compact_id', { deterministic: true }, normalizeWorkspaceId);
+  db.exec(`
+    PRAGMA defer_foreign_keys = ON;
+    UPDATE findings
+    SET project_id = compact_id(project_id), id = compact_id(id),
+        data = json_set(data, '$.projectId', compact_id(project_id), '$.id', compact_id(id))
+    WHERE project_id <> compact_id(project_id) OR id <> compact_id(id);
+    UPDATE mcp_keys SET project_id = compact_id(project_id) WHERE project_id <> compact_id(project_id);
+    UPDATE mcp_appends SET project_id = compact_id(project_id), finding_id = compact_id(finding_id)
+    WHERE project_id <> compact_id(project_id) OR finding_id <> compact_id(finding_id);
+    UPDATE projects SET id = compact_id(id), data = json_set(data, '$.id', compact_id(id))
+    WHERE id <> compact_id(id);
+    PRAGMA user_version = 1;
+  `);
 }
 
 export function openStore(path, { local, username, password }) {
@@ -80,6 +99,7 @@ export function openStore(path, { local, username, password }) {
     `);
 
     workspaceOwnerId = db.transaction(() => {
+      migrateWorkspaceIds(db);
       if (!db.pragma('table_info(mcp_keys)').some(({ name }) => name === 'access')) {
         db.exec("ALTER TABLE mcp_keys ADD COLUMN access TEXT NOT NULL DEFAULT 'append' CHECK (access IN ('append', 'manage'))");
       }
@@ -131,12 +151,17 @@ export function openStore(path, { local, username, password }) {
     deleteExpiredSessions: db.prepare('DELETE FROM sessions WHERE expires_at <= ?'),
     insertSession: db.prepare('INSERT INTO sessions (digest, owner_id, expires_at) VALUES (?, ?, ?)'),
     projects: db.prepare('SELECT data, template_instructions FROM projects WHERE owner_id = ?'),
-    project: db.prepare('SELECT owner_id, id, template_instructions FROM projects WHERE owner_id = ? AND id = ?'),
-    projectCandidates: db.prepare('SELECT owner_id, id, template_instructions FROM projects WHERE owner_id = ? LIMIT 2'),
+    project: db.prepare('SELECT owner_id, id, data, template_instructions FROM projects WHERE owner_id = ? AND id = ?'),
+    projectCandidates: db.prepare('SELECT owner_id, id, data, template_instructions FROM projects WHERE owner_id = ? LIMIT 2'),
     putProject: db.prepare(`
       INSERT INTO projects (owner_id, id, data, template_instructions) VALUES (?, ?, ?, ?)
       ON CONFLICT (owner_id, id) DO UPDATE SET
-        data = excluded.data,
+        data = CASE
+          WHEN json_type(excluded.data, '$.customFindingStatuses') IS NULL
+            AND json_type(projects.data, '$.customFindingStatuses') IS NOT NULL
+          THEN json_set(excluded.data, '$.customFindingStatuses', json_extract(projects.data, '$.customFindingStatuses'))
+          ELSE excluded.data
+        END,
         template_instructions = COALESCE(excluded.template_instructions, projects.template_instructions)
     `),
     deleteProject: db.prepare('DELETE FROM projects WHERE owner_id = ? AND id = ?'),
@@ -159,7 +184,7 @@ export function openStore(path, { local, username, password }) {
     `),
     deleteKey: db.prepare('DELETE FROM mcp_keys WHERE owner_id = ? AND project_id = ? AND id = ?'),
     mcpProject: db.prepare(`
-      SELECT projects.owner_id, projects.id, projects.template_instructions, mcp_keys.id AS key_id, mcp_keys.access
+      SELECT projects.owner_id, projects.id, projects.data, projects.template_instructions, mcp_keys.id AS key_id, mcp_keys.access
       FROM mcp_keys JOIN projects
         ON projects.owner_id = mcp_keys.owner_id AND projects.id = mcp_keys.project_id
       WHERE mcp_keys.digest = ?

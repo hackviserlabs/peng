@@ -3,6 +3,7 @@ import LocalMcpAccess from './LocalMcpAccess';
 import ProjectMcpKeys from './ProjectMcpKeys';
 import { Settings, FileText, Users, Calendar, Shield, Bookmark } from 'lucide-react';
 import RichTextEditor from '../editor/RichTextEditor';
+import ProjectFindingStatuses from './ProjectFindingStatuses';
 import ScopeList from './ScopeList';
 import type { Project, Classification } from '../../types';
 import { TEMPLATE_INSTRUCTIONS_LIMIT } from '../../constants';
@@ -10,7 +11,7 @@ import { TEMPLATE_INSTRUCTIONS_LIMIT } from '../../constants';
 interface ProjectSettingsProps {
     project: Project;
     mode?: DeploymentMode;
-    onUpdate: (field: keyof Project, value: string) => void;
+    onUpdate: <K extends keyof Project>(field: K, value: Project[K]) => void;
 }
 
 export default function ProjectSettings({ project, mode, onUpdate }: ProjectSettingsProps) {
@@ -143,6 +144,11 @@ export default function ProjectSettings({ project, mode, onUpdate }: ProjectSett
                         </div>
 
                         <div className="border-t border-zinc-800/50" />
+
+                        <ProjectFindingStatuses
+                            statuses={project.customFindingStatuses}
+                            onChange={(statuses) => onUpdate('customFindingStatuses', statuses)}
+                        />
 
                         {/* Scope */}
                         <div>

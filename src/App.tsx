@@ -14,8 +14,22 @@ import ConnectedWorkspace, { type Connection } from './components/workspace/Conn
 import type { Finding, Project } from './types';
 import { createDefaultFinding, createDefaultProject } from './types';
 import type { FindingTemplate } from './constants';
+import { createWorkspaceId, readLegacyWorkspaceLink, readWorkspacePath, workspacePath } from './types/findingLink';
 
-type ActiveView = 'editor' | 'settings';
+function readRoute() {
+  return readWorkspacePath(window.location.pathname)
+    ?? readLegacyWorkspaceLink(new URLSearchParams(window.location.search));
+}
+
+function upgradeLegacyRoute() {
+  const url = new URL(window.location.href);
+  if (readWorkspacePath(url.pathname)) return;
+  const { projectId, findingId, settings } = readLegacyWorkspaceLink(url.searchParams);
+  if (!projectId) return;
+  window.history.replaceState(null, '', workspacePath(projectId, findingId, settings));
+}
+
+type Route = ReturnType<typeof readRoute>;
 type ReportView =
   | { projectId: string; step: 'select' }
   | { projectId: string; step: 'preview'; findingIds: ReadonlySet<string> };
@@ -31,15 +45,17 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
   const { projects, pending, saveErrors } = workspace;
   const account = connection?.mode === 'organization' ? connection.account : undefined;
   const expired = account?.expired ?? false;
-  const [activeProjectId, setActiveProjectId] = useState<string | null>(null);
+  const [route, setRoute] = useState(readRoute);
+  const { projectId: activeProjectId, findingId: selectedFindingId } = route;
+  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  const accessibleProjectId = activeProject?.id;
+  const activeView = route.settings ? 'settings' : 'editor';
   const findingList = activeProjectId ? workspace.getFindings(activeProjectId) : undefined;
   const findings = findingList?.findings ?? [];
   const [busy, setBusy] = useState(false);
   const [actionError, setActionError] = useState<string>();
   const [pendingDeleteFindingId, setPendingDeleteFindingId] = useState<string | null>(null);
-  const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeView, setActiveView] = useState<ActiveView>('editor');
   const [report, setReport] = useState<ReportView | null>(null);
   const activeReport = report?.projectId === activeProjectId ? report : null;
   const [showTemplateBrowser, setShowTemplateBrowser] = useState(false);
@@ -49,8 +65,8 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
   }, [workspace, expired]);
 
   useEffect(() => {
-    if (!activeProjectId || expired) return;
-    const refresh = () => void workspace.loadFindings(activeProjectId);
+    if (!accessibleProjectId || expired) return;
+    const refresh = () => void workspace.loadFindings(accessibleProjectId);
     refresh();
     if (!serverMode) return;
     const timer = window.setInterval(() => {
@@ -61,12 +77,12 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
       window.clearInterval(timer);
       window.removeEventListener('focus', refresh);
     };
-  }, [workspace, activeProjectId, expired]);
+  }, [workspace, accessibleProjectId, expired]);
 
   useEffect(() => {
-    if (activeProjectId || expired) return;
+    if (accessibleProjectId || expired) return;
     for (const project of projects) void workspace.loadFindings(project.id);
-  }, [workspace, projects, activeProjectId, expired]);
+  }, [workspace, projects, accessibleProjectId, expired]);
 
   useEffect(() => {
     if (!pending && !busy) return;
@@ -91,7 +107,28 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [findingList?.ready, expired, activeReport]);
 
-  const activeProject = projects.find((p) => p.id === activeProjectId) ?? null;
+  useEffect(() => {
+    upgradeLegacyRoute();
+    const restoreRoute = () => {
+      upgradeLegacyRoute();
+      setRoute(readRoute());
+      setReport(null);
+      setSearchTerm('');
+      setShowTemplateBrowser(false);
+      setPendingDeleteFindingId(null);
+    };
+    window.addEventListener('popstate', restoreRoute);
+    return () => window.removeEventListener('popstate', restoreRoute);
+  }, []);
+
+  const navigate = (next: Route, replace = false) => {
+    const path = workspacePath(next.projectId, next.findingId, next.settings);
+    if (path !== window.location.pathname || window.location.search || window.location.hash) {
+      if (replace) window.history.replaceState(null, '', path);
+      else window.history.pushState(null, '', path);
+    }
+    setRoute(next);
+  };
 
   // --- Finding handlers ---
 
@@ -120,13 +157,11 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
       }
       : base;
     workspace.addFinding(newFinding);
-    setSelectedFindingId(newFinding.id);
-    setActiveView('editor');
+    handleSelectFinding(newFinding.id);
   };
 
   const handleSelectFinding = (id: string) => {
-    setSelectedFindingId(id);
-    setActiveView('editor');
+    navigate({ ...route, findingId: id, settings: false });
   };
 
   const handleDeleteFinding = (id: string) => {
@@ -136,7 +171,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
   const confirmDeleteFinding = () => {
     if (activeProjectId && pendingDeleteFindingId) {
       workspace.deleteFinding(activeProjectId, pendingDeleteFindingId);
-      if (selectedFindingId === pendingDeleteFindingId) setSelectedFindingId(null);
+      if (selectedFindingId === pendingDeleteFindingId) navigate({ ...route, findingId: null }, true);
       setPendingDeleteFindingId(null);
     }
   };
@@ -146,12 +181,12 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
     if (!original) return;
     const duplicate: Finding = {
       ...original,
-      id: crypto.randomUUID(),
+      id: createWorkspaceId(),
       title: `${original.title} (Copy)`,
       createdAt: new Date().toISOString(),
     };
     workspace.addFinding(duplicate);
-    setSelectedFindingId(duplicate.id);
+    handleSelectFinding(duplicate.id);
   };
 
   const handleUpdateFinding = <K extends keyof Finding,>(field: K, value: Finding[K]) => {
@@ -164,22 +199,19 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
 
   const handleSelectProject = (id: string) => {
     setReport(null);
-    setActiveProjectId(id);
-    setSelectedFindingId(null);
+    navigate({ projectId: id, findingId: null, settings: false });
     setSearchTerm('');
-    setActiveView('editor');
   };
 
   const handleBackToProjects = () => {
-    setActiveProjectId(null);
-    setSelectedFindingId(null);
+    navigate({ projectId: null, findingId: null, settings: false });
     setPendingDeleteFindingId(null);
     setShowTemplateBrowser(false);
     setReport(null);
     setSearchTerm('');
   };
 
-  const handleUpdateProject = (field: keyof Project, value: string) => {
+  const handleUpdateProject = <K extends keyof Project,>(field: K, value: Project[K]) => {
     if (activeProjectId) workspace.updateProject(activeProjectId, field, value);
   };
 
@@ -260,6 +292,12 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
     return (
       <div className="flex h-screen flex-col bg-zinc-950">
         {notices}
+        {(activeProjectId || selectedFindingId) && (
+          <div role="alert" className="flex justify-between gap-4 bg-zinc-900 px-5 py-2 text-sm text-zinc-200">
+            This project link is unavailable in your workspace.
+            <button type="button" onClick={handleBackToProjects} className="underline">Dismiss</button>
+          </div>
+        )}
         <ProjectDashboard
           projects={projects}
           getFindings={(id) => workspace.getFindings(id)?.findings}
@@ -300,7 +338,9 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
       </div>
       <div className={`flex min-h-0 flex-1 ${activeReport?.step === 'preview' ? 'print:hidden' : ''}`}>
         <Sidebar
+          key={activeProjectId}
           projectName={activeProject.name}
+          customStatuses={activeProject.customFindingStatuses}
           findings={filteredFindings}
           selectedFindingId={activeView === 'editor' ? selectedFindingId : null}
           activeView={activeView}
@@ -310,7 +350,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
           onSelectFinding={handleSelectFinding}
           onAddFinding={() => handleAddFinding()}
           onBrowseTemplates={() => findingList?.ready && setShowTemplateBrowser(true)}
-          onOpenSettings={() => setActiveView('settings')}
+          onOpenSettings={() => navigate({ ...route, findingId: null, settings: true })}
           onExport={() => findingList?.ready && exportData()}
           onBackToProjects={handleBackToProjects}
           onGenerateReport={() => findingList?.ready && setReport({ projectId: activeProjectId, step: 'select' })}
@@ -319,6 +359,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
         />
         {activeView === 'settings' && !expired ? (
           <ProjectSettings
+            key={activeProjectId}
             project={activeProject}
             mode={connection?.mode}
             onUpdate={handleUpdateProject}
@@ -327,10 +368,18 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
           <div className="grid flex-1 place-items-center text-sm text-zinc-400">
             {findingList?.error ? 'Findings are unavailable.' : 'Loading findings…'}
           </div>
+        ) : selectedFindingId && !selectedFinding && !findingList.error ? (
+          <div className="grid flex-1 place-content-center gap-3 text-center text-sm text-zinc-400">
+            <p role="status">This finding is unavailable in this project.</p>
+            <button type="button" onClick={() => navigate({ ...route, findingId: null }, true)} className="underline">
+              Show project
+            </button>
+          </div>
         ) : (
           <Editor
-            key={selectedFindingId ?? 'empty'}
+            key={JSON.stringify([activeProjectId, selectedFindingId])}
             selectedFinding={selectedFinding}
+            customStatuses={activeProject.customFindingStatuses}
             onUpdateField={handleUpdateFinding}
             onDelete={handleDeleteFinding}
             onDuplicate={handleDuplicateFinding}
@@ -339,6 +388,7 @@ function WorkspaceView({ connection }: { connection?: Connection }) {
       </div>
       {activeReport?.step === 'select' && (
         <ReportFindingSelector
+          customStatuses={activeProject.customFindingStatuses}
           key={activeProjectId}
           findings={findings}
           onCancel={() => setReport(null)}

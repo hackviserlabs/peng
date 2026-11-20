@@ -12,7 +12,50 @@ import { ALL_TEMPLATES } from '../../src/data/templates/index.ts';
 import { createDefaultFinding, createDefaultProject } from '../../src/types/index.ts';
 import { createApp } from '../app.js';
 import { createLoginLimiter } from '../login-limiter.js';
-import { digest } from '../store.js';
+import { digest, openStore } from '../store.js';
+
+test('workspace ID migration preserves findings, project keys and append retries', async (t) => {
+  const directory = await mkdtemp(join(tmpdir(), 'peng-id-migration-'));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const path = join(directory, 'peng.sqlite');
+  const oldProjectId = '00112233-4455-6677-8899-aabbccddeeff';
+  const oldFindingId = 'ffeeddcc-bbaa-9988-7766-554433221100';
+  const projectId = 'ABEiM0RVZneImaq7zN3u_w';
+  const findingId = '_-7dzLuqmYh3ZlVEMyIRAA';
+  const initial = openStore(path, { local: true });
+  const owner = initial.workspaceOwnerId;
+  initial.statements.putProject.run(owner, oldProjectId, JSON.stringify({ id: oldProjectId }), 'Guidance');
+  initial.statements.insertFinding.run(owner, oldProjectId, oldFindingId, JSON.stringify({
+    id: oldFindingId, projectId: oldProjectId, title: 'Existing finding',
+  }));
+  initial.statements.insertKey.run('key', 'Agent', '2026-01-01', 'key-digest', 'manage', owner, oldProjectId);
+  initial.statements.insertAppend.run(owner, oldProjectId, 'append-retry', 'input-digest', oldFindingId);
+  initial.close();
+  const legacy = new Database(path);
+  legacy.pragma('user_version = 0');
+  legacy.close();
+
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const migrated = openStore(path, { local: true });
+    try {
+      const { statements } = migrated;
+      assert.deepEqual(JSON.parse(statements.projects.all(owner)[0].data), { id: projectId });
+      assert.deepEqual(JSON.parse(statements.findings.all(owner, projectId)[0].data), {
+        id: findingId, projectId, title: 'Existing finding',
+      });
+      const project = statements.mcpProject.get('key-digest');
+      assert.equal(project.access, 'manage');
+      assert.equal(project.template_instructions, 'Guidance');
+      assert.equal(project.id, projectId);
+      const retry = migrated.appendFinding(() => project, 'append-retry', 'input-digest', () => {
+        assert.fail('An existing append must not create a new finding');
+      });
+      assert.deepEqual(retry, { findingId, created: false });
+    } finally {
+      migrated.close();
+    }
+  }
+});
 
 const admin = { adminUsername: 'admin', adminPassword: 'test fixture password only' };
 
@@ -370,6 +413,37 @@ test('project key management requires the project owner and an explicit manage g
     'Finding reviewer': 'manage',
   });
   for (const key of keys) assert.deepEqual(Object.keys(key).sort(), ['access', 'createdAt', 'id', 'name']);
+});
+
+test('custom finding statuses and colors persist and are scoped to their project', async (t) => {
+  const { request, login } = await runServer(t);
+  const { cookie } = await login();
+  const project = createDefaultProject('Report workflow');
+  const other = createDefaultProject('Another workflow');
+  const customFindingStatuses = [{ name: 'Ready', color: '#34d399' }];
+  const saveProject = (body) => request('/api/projects/' + body.id, { method: 'PUT', cookie, body });
+
+  assert.equal((await saveProject({ ...project, customFindingStatuses })).status, 204);
+  assert.equal((await saveProject(other)).status, 204);
+  assert.equal((await saveProject({ ...project, name: 'Updated by an older client' })).status, 204);
+  const projects = await (await request('/api/projects', { cookie })).json();
+  assert.deepEqual(projects.find(({ id }) => id === project.id).customFindingStatuses, customFindingStatuses);
+  for (const invalid of [
+    [{ name: 'verified', color: '#34d399' }],
+    [{ name: 'Ready', color: 'green' }],
+    [...customFindingStatuses, { name: 'ready', color: '#000000' }],
+  ]) {
+    assert.equal((await saveProject({ ...project, customFindingStatuses: invalid })).status, 400);
+  }
+
+  const saveReadyFinding = (projectId) => {
+    const finding = { ...createDefaultFinding(projectId), status: 'Ready' };
+    return request('/api/projects/' + projectId + '/findings/' + finding.id, { method: 'PUT', cookie, body: finding });
+  };
+  assert.equal((await saveReadyFinding(project.id)).status, 204);
+  assert.equal((await saveReadyFinding(other.id)).status, 400);
+  const findings = await (await request('/api/projects/' + project.id + '/findings', { cookie })).json();
+  assert.equal(findings[0].status, 'Ready');
 });
 
 test('the finding API validates triage metadata and preserves it when older clients save', async (t) => {

@@ -1,4 +1,5 @@
-import { FINDING_STATUSES, type Project, type Finding, type Severity, type FindingStatus } from '../types';
+import { type Project, type Finding, type Severity, type FindingStatus } from '../types';
+import { findingStatusNames } from '../types/findingStatus';
 
 export type ReportFinding = Omit<Finding, 'notes' | 'triageNotes'>;
 
@@ -38,7 +39,8 @@ export function buildReportData(project: Project, findings: Finding[]): ReportDa
     const stats: ReportStats = {
         total: sorted.length,
         bySeverity: { Critical: 0, High: 0, Medium: 0, Low: 0, Info: 0 },
-        byStatus: Object.fromEntries(FINDING_STATUSES.map(status => [status, 0])) as Record<FindingStatus, number>,
+        byStatus: Object.fromEntries(findingStatusNames(project.customFindingStatuses, sorted.map(finding => finding.status))
+            .map(status => [status, 0])),
         byCategory: new Map(),
     };
     for (const f of sorted) {

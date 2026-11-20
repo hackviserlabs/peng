@@ -1,5 +1,6 @@
 import { errorMessage } from './api';
 import { workspaceStorage as storage } from './workspaceStorage';
+import { FINDING_STATUSES } from '../types/findingStatus';
 import type { Finding, Project } from '../types';
 
 interface FindingList {
@@ -11,12 +12,14 @@ interface FindingList {
 interface Write {
     projectId: string;
     findingId?: string;
+    needsProjectSave?: boolean;
     save: () => Promise<void>;
     timer?: ReturnType<typeof setTimeout>;
     error?: string;
 }
 
 const AUTOSAVE_DELAY = 350;
+const builtInStatuses = new Set<string>(FINDING_STATUSES);
 
 export class Workspace {
     private listeners = new Set<() => void>();
@@ -118,7 +121,7 @@ export class Workspace {
         this.changed();
     }
 
-    updateProject(id: string, field: keyof Project, value: string) {
+    updateProject<K extends keyof Project>(id: string, field: K, value: Project[K]) {
         const project = this.projects.find(item => item.id === id);
         if (!project) return;
         const updated = { ...project, [field]: value, updatedAt: new Date().toISOString() };
@@ -162,13 +165,13 @@ export class Workspace {
         this.findingReads.get(projectId)?.add(id);
         this.queue(`project/${projectId}/finding/${id}`, projectId, () => finding
             ? storage.saveFinding(finding)
-            : storage.deleteFinding(projectId, id), id);
+            : storage.deleteFinding(projectId, id), id, finding !== null && !builtInStatuses.has(finding.status));
     }
 
-    private queue(key: string, projectId: string, save: Write['save'], findingId?: string) {
+    private queue(key: string, projectId: string, save: Write['save'], findingId?: string, needsProjectSave?: boolean) {
         const previous = this.writes.get(key);
         clearTimeout(previous?.timer);
-        const write: Write = { projectId, findingId, save };
+        const write: Write = { projectId, findingId, needsProjectSave, save };
         write.timer = setTimeout(() => {
             write.timer = undefined;
             void this.send(key);
@@ -180,6 +183,7 @@ export class Workspace {
     private async send(key: string) {
         const write = this.writes.get(key);
         if (!write || write.timer || write.error || this.sending.has(key)) return;
+        if (write.needsProjectSave && this.writes.has(`project/${write.projectId}`)) return;
         this.sending.add(key);
 
         try {
@@ -192,6 +196,13 @@ export class Workspace {
             this.sending.delete(key);
             this.changed();
             if (this.writes.get(key) !== write) void this.send(key);
+            if (key === `project/${write.projectId}` && !this.writes.has(key)) {
+                for (const [pendingKey, pendingWrite] of this.writes) {
+                    if (pendingWrite.needsProjectSave && pendingWrite.projectId === write.projectId) {
+                        void this.send(pendingKey);
+                    }
+                }
+            }
         }
     }
 

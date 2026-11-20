@@ -93,6 +93,12 @@ Both modes use Streamable HTTP.
 - **Local.** Connect to `http://<printed-address>/mcp` without a key. Call `list_projects` to find the project's ID, then pass it as `projectId` to project-specific tools.
 - **Organization.** Create a named key under **MCP access** in project settings and copy it while it is visible. Use the displayed endpoint and send `Authorization: Bearer <key>`. The key selects the project, so read project guidance with `list_templates` using `{"guidanceOnly":true}`. Choose append access for submission, or manage access when the agent also needs to read and triage existing cards. Revoke the key when the agent's work is done.
 
+### Share a finding
+
+Open a finding and click **Copy link**, or copy the address from your browser. The link opens the card in the same workspace, including after sign-in. In the static app, findings are stored in the browser, so the receiving browser needs to have the original record.
+
+An agent connected to the same Peng instance can read the card by passing the full link to `get_finding`, for example `{"url":"https://peng.example/ABEiM0RVZneImaq7zN3u_w/_-7dzLuqmYh3ZlVEMyIRAA"}`. The two path segments match the project and finding IDs used by Peng MCP. In organization mode, the agent needs a manage key for that project.
+
 ### Ports and HTTPS
 
 Compose publishes nginx on `127.0.0.1`. The default `PENG_PORT=0` picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed port. Keep local mode on loopback.

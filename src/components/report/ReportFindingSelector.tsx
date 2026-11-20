@@ -1,9 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
-import { FINDING_STATUS_COLORS, SEVERITY_COLORS } from '../../constants';
-import { FINDING_STATUSES, findingStatusLabel, type Finding, type FindingStatus } from '../../types';
+import { SEVERITY_COLORS } from '../../constants';
+import { findingStatusLabel, type Finding, type FindingStatus } from '../../types';
+
+import FindingStatusBadge from '../ui/FindingStatusBadge';
+import { findingStatusNames, type CustomFindingStatus } from '../../types/findingStatus';
 
 interface ReportFindingSelectorProps {
     findings: Finding[];
+    customStatuses?: readonly CustomFindingStatus[];
     onCancel: () => void;
     onPreview: (findingIds: ReadonlySet<string>) => void;
 }
@@ -16,7 +20,7 @@ function toggleItem<T>(items: ReadonlySet<T>, item: T) {
     return next;
 }
 
-export default function ReportFindingSelector({ findings, onCancel, onPreview }: ReportFindingSelectorProps) {
+export default function ReportFindingSelector({ findings, customStatuses, onCancel, onPreview }: ReportFindingSelectorProps) {
     const dialogRef = useRef<HTMLDialogElement>(null);
     const [includedIds, setIncludedIds] = useState(() => new Set(findings.map(({ id }) => id)));
     const [statuses, setStatuses] = useState(() => new Set<FindingStatus>());
@@ -50,7 +54,7 @@ export default function ReportFindingSelector({ findings, onCancel, onPreview }:
                     <fieldset className="mb-4">
                         <legend className="mb-2 text-xs font-medium text-zinc-300">Show by status</legend>
                         <div className="flex flex-wrap gap-2">
-                            {FINDING_STATUSES.map((status) => (
+                            {findingStatusNames(customStatuses, findings.map(finding => finding.status)).map((status) => (
                                 <label key={status} className="flex cursor-pointer items-center gap-2 rounded-md bg-zinc-800 px-2.5 py-1.5 text-xs">
                                     <input
                                         type="checkbox"
@@ -96,7 +100,7 @@ export default function ReportFindingSelector({ findings, onCancel, onPreview }:
                                         />
                                         <span className="min-w-0 flex-1 wrap-anywhere text-sm text-zinc-200">{finding.title || 'Untitled Finding'}</span>
                                         <span className={`text-xs font-medium ${SEVERITY_COLORS[finding.severity].text}`}>{finding.severity}</span>
-                                        <span className={`rounded px-2 py-0.5 text-xs font-medium ${FINDING_STATUS_COLORS[finding.status]}`}>{findingStatusLabel(finding.status)}</span>
+                                        <FindingStatusBadge status={finding.status} customStatuses={customStatuses} />
                                     </label>
                                 </li>
                             ))}

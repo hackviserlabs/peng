@@ -105,6 +105,8 @@ In local mode, use the same endpoint without credentials. Call `list_projects` w
 
 Local MCP validates any supplied Origin and rejects browser requests marked as coming from another origin. Browser MCP mutations must send the exact same-origin `Origin` header. Native clients can omit Origin and send MCP POST requests as `application/json`.
 
+To read a shared card, call `get_finding` with `{"url":"https://peng.example/ABEiM0RVZneImaq7zN3u_w/_-7dzLuqmYh3ZlVEMyIRAA"}` using a link from the connected Peng instance. The two path segments are the same short IDs returned by MCP. You can pass them directly as `projectId` and `id` in local mode, or pass the second segment as `id` in organization mode. In organization mode, the linked project must match the manage key. You can also call `get_finding` with `id` and, in local mode, an optional `projectId`.
+
 ### Submission and triage
 
 1. Call `list_templates` with `{"guidanceOnly":true}` once per project in each reporting session to read project instructions and the default finding format. Include `projectId` in local mode when selecting a project. With `guidanceOnly` omitted or false, an unfiltered call includes the first catalog page. Use `limit` and `offset` to browse catalog pages, or narrow the results with `category` and `query`. Call `get_template` with a result ID for defaults, remediation guidance and references.

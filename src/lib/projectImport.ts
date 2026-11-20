@@ -1,7 +1,8 @@
 import {
-    createDefaultFinding, createDefaultProject, FINDING_CONFIDENCES, FINDING_STATUSES,
+    createDefaultFinding, createDefaultProject, FINDING_CONFIDENCES,
     FINDING_TARGET_FIELDS, isValidScope, type Finding, type FindingTarget, type Project,
 } from '../types';
+import { findingStatusNames, isCustomFindingStatusList } from '../types/findingStatus';
 import { sanitizeRichText } from './richText';
 import { FINDING_METADATA_LIMIT, FINDING_METADATA_LIST_LIMIT, TEMPLATE_INSTRUCTIONS_LIMIT, TRIAGE_NOTES_LIMIT } from '../constants';
 
@@ -76,7 +77,14 @@ export function parseProjectImport(json: string): { project: Project; findings: 
         const data = readRecord(JSON.parse(json));
         if (!Array.isArray(data.findings)) throw new Error();
         const defaults = createDefaultProject('Imported Project');
-        const project = readFields(defaults, readRecord(data.project), 'templateInstructions');
+        const projectRecord = readRecord(data.project);
+        const project = readFields(defaults, projectRecord, 'templateInstructions');
+        const customStatuses = projectRecord.customFindingStatuses;
+        if (customStatuses !== undefined) {
+            if (!isCustomFindingStatusList(customStatuses)) throw new Error('The import file contains invalid custom finding statuses.');
+            project.customFindingStatuses = customStatuses;
+        }
+        const statuses = findingStatusNames(project.customFindingStatuses);
         project.id = defaults.id;
         project.createdAt = defaults.createdAt;
         project.updatedAt = defaults.updatedAt;
@@ -92,7 +100,7 @@ export function parseProjectImport(json: string): { project: Project; findings: 
             finding.status ||= defaults.status;
             finding.createdAt ||= defaults.createdAt;
             if (!['Critical', 'High', 'Medium', 'Low', 'Info'].includes(finding.severity)
-                || !FINDING_STATUSES.includes(finding.status)) throw new Error();
+                || !statuses.includes(finding.status)) throw new Error();
             readTriageMetadata(finding, record);
             return finding;
         });

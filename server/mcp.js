@@ -1,12 +1,13 @@
 import { toNodeHandler } from '@modelcontextprotocol/node';
 import { createMcpHandler, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
+import { normalizeWorkspaceId, readLegacyWorkspaceLink, readWorkspacePath } from '../src/types/findingLink.ts';
 import {
   appendDigest, appendInput, evidenceGuidance, findingConfidence, findingDetails, findingPatch, findingStatus,
   newFinding, renderFindingFields, templateId,
 } from './mcp-findings.js';
 import { catalogSummaries, templateDetails, templateFindingFields, templates, templatesById } from './mcp-templates.js';
-import { id as projectIdSchema, severity } from './schemas.js';
+import { id as projectIdSchema, isProjectFindingStatus, severity } from './schemas.js';
 
 const templateSummary = z.object({ id: z.string(), title: z.string(), category: z.string(), severity });
 const findingSummary = z.object({
@@ -67,7 +68,7 @@ export function createMcpEndpoint(store, { local }) {
         return project;
       }
       if (projectId !== undefined) {
-        return statements.project.get(workspaceOwnerId, projectId) ?? { error: 'Unknown project ID' };
+        return statements.project.get(workspaceOwnerId, normalizeWorkspaceId(projectId)) ?? { error: 'Unknown project ID' };
       }
       const candidates = statements.projectCandidates.all(workspaceOwnerId);
       if (candidates.length === 0) return { error: 'No projects in the local workspace' };
@@ -153,7 +154,14 @@ export function createMcpEndpoint(store, { local }) {
     function appendFinding(projectId, { idempotencyKey, ...values }) {
       const template = templatesById.get(values.templateId);
       if (values.templateId !== undefined && !template) return { error: 'Unknown template ID' };
-      return store.appendFinding(() => selectProject(projectId), idempotencyKey, appendDigest(values), (id) => {
+      return store.appendFinding(() => {
+        const project = selectProject(projectId);
+        if (project.error) return project;
+        if (values.status !== undefined && !isProjectFindingStatus(values.status, project.data)) {
+          return { error: 'Invalid arguments: unknown finding status for this project' };
+        }
+        return project;
+      }, idempotencyKey, appendDigest(values), (id) => {
         const inherited = template ? templateFindingFields(template) : {};
         return newFinding(id, { ...inherited, ...values });
       });
@@ -212,7 +220,7 @@ export function createMcpEndpoint(store, { local }) {
         const project = selectProject(projectId, true);
         if (project.error) return failure(project.error);
         const rows = statements.mcpFindingSummaries.all({
-          ownerId: project.owner_id, projectId: project.id, query: query ?? null,
+          ownerId: project.owner_id, projectId: project.id, query: query ? normalizeWorkspaceId(query) : null,
           severity: severity ?? null, status: status ?? null, limit: limit + 1, offset,
         });
         const findings = rows.slice(0, limit).map(({ confidence, templateId, category, ...summary }) => ({
@@ -225,31 +233,48 @@ export function createMcpEndpoint(store, { local }) {
       });
 
       server.registerTool('get_finding', {
-        description: 'Get a full report finding by ID, including its stored rich-text report fields.',
-        inputSchema: z.strictObject({ ...projectInput, id: projectIdSchema }),
+        description: 'Get a full report finding by ID or by a Peng link copied from the workspace, including its stored rich-text report fields. The second URL segment is the finding ID. Use only links from the connected Peng instance.',
+        inputSchema: z.strictObject({
+          ...projectInput,
+          id: projectIdSchema.optional(),
+          url: z.url({ protocol: /^https?$/ }).optional().describe('A Peng link with the project and finding IDs in its path.'),
+        }).refine(({ id, url, projectId }) => url === undefined ? id !== undefined : id === undefined && projectId === undefined, {
+          message: 'Supply either a finding ID (with optional local projectId) or a Peng finding URL',
+        }),
         outputSchema: z.object({ finding: findingDetail }),
         annotations: readOnly,
-      }, ({ projectId, id }) => {
-        const project = selectProject(projectId, true);
+      }, ({ projectId, id, url }) => {
+        const address = url ? new URL(url) : null;
+        const link = address
+          ? readWorkspacePath(address.pathname) ?? readLegacyWorkspaceLink(address.searchParams)
+          : null;
+        if (link && (!projectIdSchema.safeParse(link.projectId).success
+          || !projectIdSchema.safeParse(link.findingId).success)) return failure('Invalid Peng finding link');
+        const project = selectProject(link ? link.projectId : projectId, true);
         if (project.error) return failure(project.error);
-        const row = statements.mcpFinding.get(project.owner_id, project.id, id);
+        if (link && link.projectId !== project.id) return failure('Finding link is for a different project');
+        const row = statements.mcpFinding.get(project.owner_id, project.id, link ? link.findingId : normalizeWorkspaceId(id));
         return row ? result({ finding: JSON.parse(row.data) }) : failure('Unknown finding ID');
       });
 
       server.registerTool('update_finding', {
-        description: 'Patch the supplied report fields of an existing finding. Supply plain text for report fields. An empty string or array clears the corresponding text or list.',
+        description: 'Patch the supplied report fields of an existing finding. Use the finding ID from list_findings or the second segment of a Peng finding URL. Supply plain text for report fields. An empty string or array clears the corresponding text or list.',
         inputSchema: z.strictObject({ ...projectInput, id: projectIdSchema, patch: findingPatch }),
         outputSchema: z.object({ findingId: z.string(), updated: z.literal(true) }),
         annotations: { idempotentHint: true, openWorldHint: false },
       }, ({ projectId, id, patch }) => {
+        const findingId = normalizeWorkspaceId(id);
         const project = selectProject(projectId, true);
         if (project.error) return failure(project.error);
+        if (patch.status !== undefined && !isProjectFindingStatus(patch.status, project.data)) {
+          return failure('Invalid arguments: unknown finding status for this project');
+        }
         if (patch.templateId !== undefined && !templatesById.has(patch.templateId)) return failure('Unknown template ID');
         const { changes } = statements.mcpUpdateFinding.run({
-          ownerId: project.owner_id, projectId: project.id, findingId: id,
+          ownerId: project.owner_id, projectId: project.id, findingId,
           patch: JSON.stringify(renderFindingFields(patch)),
         });
-        return changes ? result({ findingId: id, updated: true }) : failure('Unknown finding ID');
+        return changes ? result({ findingId, updated: true }) : failure('Unknown finding ID');
       });
     }
 

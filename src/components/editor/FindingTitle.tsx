@@ -1,8 +1,10 @@
 import { useState, useRef, useEffect } from 'react';
 import { Activity, CircleDot, Link2, Tag, Server, Hash, ShieldAlert, List, BarChart3, Plus } from 'lucide-react';
-import { FINDING_STATUS_COLORS, SEVERITY_COLORS } from '../../constants';
+import { findingStatusAppearance, SEVERITY_COLORS } from '../../constants';
 import { autoResize } from '../../hooks/useAutoResize';
-import { FINDING_STATUSES, findingStatusLabel, type Finding, type Severity, type UpdateFindingField } from '../../types';
+import { findingStatusLabel, type Finding, type Severity, type UpdateFindingField } from '../../types';
+
+import { findingStatusNames, type CustomFindingStatus } from '../../types/findingStatus';
 
 const SEVERITIES: Severity[] = ['Critical', 'High', 'Medium', 'Low', 'Info'];
 
@@ -46,11 +48,13 @@ function getCvssLabel(value: string): string {
 
 interface FindingTitleProps {
     finding: Finding;
+    customStatuses?: readonly CustomFindingStatus[];
     onUpdate: UpdateFindingField;
     onOpenCvssCalculator?: () => void;
 }
 
-export default function FindingTitle({ finding, onUpdate, onOpenCvssCalculator }: FindingTitleProps) {
+export default function FindingTitle({ finding, customStatuses, onUpdate, onOpenCvssCalculator }: FindingTitleProps) {
+    const statusAppearance = findingStatusAppearance(finding.status, customStatuses);
     const { ref: severityRef, open: severityOpen, setOpen: setSeverityOpen } = useDropdown();
     const { ref: addRef, open: addOpen, setOpen: setAddOpen } = useDropdown();
     const { ref: methodRef, open: methodOpen, setOpen: setMethodOpen } = useDropdown();
@@ -134,13 +138,11 @@ export default function FindingTitle({ finding, onUpdate, onOpenCvssCalculator }
                     </span>
                     <select
                         value={finding.status}
-                        onChange={(event) => {
-                            const status = FINDING_STATUSES.find(value => value === event.target.value);
-                            if (status) onUpdate('status', status);
-                        }}
-                        className={`px-2 py-1 rounded text-xs font-medium ${FINDING_STATUS_COLORS[finding.status]}`}
+                        onChange={(event) => onUpdate('status', event.target.value)}
+                        className={`min-w-0 max-w-full truncate px-2 py-1 rounded text-xs font-medium ${statusAppearance.className}`}
+                        style={statusAppearance.style}
                     >
-                        {FINDING_STATUSES.map(status => (
+                        {findingStatusNames(customStatuses, [finding.status]).map(status => (
                             <option key={status} value={status} className="bg-zinc-900 text-zinc-200">
                                 {findingStatusLabel(status)}
                             </option>
@@ -204,7 +206,12 @@ export default function FindingTitle({ finding, onUpdate, onOpenCvssCalculator }
                                             const v = e.target.value;
                                             if (v === '' || /^\d{0,2}\.?\d{0,1}$/.test(v)) {
                                                 const n = parseFloat(v);
-                                                if (v === '' || (n >= 0 && n <= 10)) onUpdate('cvss', v);
+                                                if (v === '' || (n >= 0 && n <= 10)) {
+                                                    onUpdate('cvss', v);
+                                                    if (finding.cvssVector && (v === '' || n !== parseFloat(finding.cvss))) {
+                                                        onUpdate('cvssVector', '');
+                                                    }
+                                                }
                                             }
                                         }}
                                         placeholder="0.0"
