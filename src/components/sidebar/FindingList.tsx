@@ -2,15 +2,12 @@ import { useState, useRef, useEffect } from 'react';
 import { MoreHorizontal, Copy, Trash2 } from 'lucide-react';
 import { SEVERITY_COLORS } from '../../constants';
 import type { Finding } from '../../types';
-
-const STATUS_STYLE: Record<string, string> = {
-    'Open': 'bg-zinc-500/10 text-zinc-400',
-    'Fixed': 'bg-green-500/10 text-green-400',
-    'Accepted Risk': 'bg-yellow-500/10 text-yellow-400',
-};
+import FindingStatusBadge from '../ui/FindingStatusBadge';
+import type { CustomFindingStatus } from '../../types/findingStatus';
 
 interface FindingListProps {
     findings: Finding[];
+    customStatuses?: readonly CustomFindingStatus[];
     selectedFindingId: string | null;
     onSelectFinding: (id: string) => void;
     onDeleteFinding: (id: string) => void;
@@ -19,6 +16,7 @@ interface FindingListProps {
 
 export default function FindingList({
     findings,
+    customStatuses,
     selectedFindingId,
     onSelectFinding,
     onDeleteFinding,
@@ -92,17 +90,14 @@ export default function FindingList({
                             </div>
                         )}
                     </div>
-                    <div className="flex items-center gap-2">
+                    {f.category && <p className="mb-2 text-xs text-zinc-400 break-words">{f.category}</p>}
+                    <div className="flex flex-wrap items-center gap-2">
                         <span
                             className={`text-[10px] font-bold px-2 py-0.5 rounded uppercase tracking-wider ${SEVERITY_COLORS[f.severity].bg} ${SEVERITY_COLORS[f.severity].text}`}
                         >
                             {f.severity}
                         </span>
-                        <span
-                            className={`text-[10px] font-medium px-2 py-0.5 rounded ${STATUS_STYLE[f.status] || STATUS_STYLE['Open']}`}
-                        >
-                            {f.status}
-                        </span>
+                        <FindingStatusBadge status={f.status} customStatuses={customStatuses} />
                     </div>
                 </div>
             ))}

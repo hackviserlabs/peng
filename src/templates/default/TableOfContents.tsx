@@ -13,7 +13,7 @@ export function TableOfContents({ data }: { data: ReportData }) {
                 <TocEntry num="1" title="Executive Summary" />
                 <TocEntry num="2" title="Scope" />
                 <TocEntry num="3" title="Summary of Findings" />
-                <TocEntry num="4" title="Detailed Findings" />
+                {data.stats.total > 0 && <TocEntry num="4" title="Detailed Findings" />}
 
                 {/* Finding sub-entries */}
                 {data.findings.map((f, i) => (

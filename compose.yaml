@@ -1,0 +1,46 @@
+services:
+  web:
+    build: .
+    ports:
+      - "127.0.0.1:${PENG_PORT:-0}:8080"
+    depends_on:
+      server:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "/dev/null", "http://127.0.0.1:8080/healthz"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  server:
+    build:
+      context: .
+      dockerfile: docker/server.Dockerfile
+    init: true
+    environment:
+      PORT: "3000"
+      BIND_HOST: 0.0.0.0
+      DATABASE_PATH: /data/peng.sqlite
+      DEPLOY_MODE: ${DEPLOY_MODE-organization}
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      APP_ORIGIN: ${APP_ORIGIN:-}
+      COOKIE_SECURE: "${COOKIE_SECURE:-false}"
+    volumes:
+      - peng-data:/data
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - >-
+          fetch('http://127.0.0.1:3000/healthz', { signal: AbortSignal.timeout(2000) })
+          .then(response => process.exit(response.ok ? 0 : 1), () => process.exit(1))
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  peng-data:

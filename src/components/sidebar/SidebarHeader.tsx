@@ -3,7 +3,7 @@ import { ArrowLeft, Download, Plus, Search, Check } from 'lucide-react';
 interface SidebarHeaderProps {
     projectName: string;
     searchTerm: string;
-    lastSaved: Date | null;
+    saveStatus?: 'saving' | 'saved';
     onSearchChange: (value: string) => void;
     onAddFinding: () => void;
     onExport: () => void;
@@ -13,7 +13,7 @@ interface SidebarHeaderProps {
 export default function SidebarHeader({
     projectName,
     searchTerm,
-    lastSaved,
+    saveStatus,
     onSearchChange,
     onAddFinding,
     onExport,
@@ -29,7 +29,8 @@ export default function SidebarHeader({
                     <ArrowLeft className="w-4 h-4" /> Projects
                 </button>
                 <div className="flex items-center gap-2">
-                    {lastSaved && (
+                    {saveStatus === 'saving' && <span role="status" className="text-[10px] text-zinc-400">Saving…</span>}
+                    {saveStatus === 'saved' && (
                         <span className="flex items-center gap-1 text-[10px] text-emerald-500/70">
                             <Check className="w-3 h-3" /> Saved
                         </span>
@@ -37,7 +38,7 @@ export default function SidebarHeader({
                     <button
                         onClick={onExport}
                         className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-800 rounded transition-colors"
-                        title="Export Project"
+                        title="Export project backup (includes internal notes)"
                     >
                         <Download className="w-4 h-4" />
                     </button>

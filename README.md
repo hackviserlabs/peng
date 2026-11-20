@@ -12,6 +12,7 @@
 <p align="center">
   <a href="#features">Features</a> •
   <a href="#getting-started">Getting Started</a> •
+  <a href="#docker-deployment">Docker Deployment</a> •
   <a href="#usage">Usage</a> •
   <a href="#tech-stack">Tech Stack</a> •
   <a href="#contributing">Contributing</a> •
@@ -22,7 +23,7 @@
 
 ## Why peng?
 
-Most pentest report tools are either expensive SaaS platforms or clunky desktop apps. **peng** is a free, open-source alternative that runs entirely in your browser. Your data never touches a server — everything stays local in your browser's storage.
+Most pentest report tools are either expensive SaaS platforms or clunky desktop apps. **peng** is a free, open-source alternative. The default static build stores reports in your browser. The Docker deployment stores them in a self-hosted SQLite database.
 
 ## Features
 
@@ -32,22 +33,21 @@ Most pentest report tools are either expensive SaaS platforms or clunky desktop 
 - **Multi-Project Support** — Manage multiple assessments independently
 - **CVSS Scoring** — Built-in CVSS v3.1 score input with automatic severity mapping
 - **Metadata Fields** — Endpoint, parameter, affected host, port, CVE, CWE per finding
-- **Offline-First** — No cloud, no accounts, no servers. 100% client-side with IndexedDB storage
+- **Offline Mode** — The static build uses IndexedDB and works without an account
 - **Dark Theme** — Professional dark UI designed for long assessment sessions
 
 ## Getting Started
 
 ### Prerequisites
 
-- [Node.js](https://nodejs.org/) 18+
-- npm or pnpm
+- [Node.js](https://nodejs.org/) 24 LTS and npm
 
 ### Installation
 
 ```bash
-git clone https://github.com/hackviserr/peng.git
+git clone https://github.com/IgorDuino/peng.git
 cd peng
-npm install
+npm ci
 npm run dev
 ```
 
@@ -61,6 +61,51 @@ npm run preview
 ```
 
 The production build will be in the `dist/` directory. You can deploy it to any static hosting provider (Vercel, Netlify, GitHub Pages, etc.).
+
+## Docker Deployment
+
+Both modes use the same `compose.yaml`. Run these steps from the repository root.
+
+1. For a new deployment, create the gitignored `.env` from the example. The command refuses to overwrite an existing file.
+
+   ```bash
+   (umask 077; set -C; cat .env.example > .env)
+   ```
+
+2. In `.env`, set `DEPLOY_MODE=local` for a trusted loopback workspace without sign-in, or `DEPLOY_MODE=organization` for signed-in access. Before the first organization startup on a volume, including when promoting a local workspace, set `ADMIN_USERNAME=admin` and set `ADMIN_PASSWORD` to a strong password generated with `openssl rand -hex 24`. Later organization startups use the account saved in the volume. An existing installation with no `DEPLOY_MODE` set defaults to `organization`.
+3. Build and start the stack, then open the printed address in your browser. In organization mode, sign in with the bootstrapped account.
+
+   ```bash
+   docker compose up --build -d --wait &&
+   docker compose port web 8080
+   ```
+
+### Switch modes or apply settings
+
+To switch an existing deployment, edit `DEPLOY_MODE` in your existing `.env`. Keep any existing credentials. If you are switching to organization mode for the first time on this volume, add the bootstrap credentials from step 2. Keep the same Compose project name so both modes use the same `peng-data` volume. Compose defaults the project name to the checkout directory. Avoid `docker compose down -v`, which deletes the volume.
+
+Apply `.env` changes with `docker compose up -d --wait`. Run `docker compose port web 8080` to check the address.
+
+### Connect an MCP client
+
+Both modes use Streamable HTTP.
+
+- **Local.** Connect to `http://<printed-address>/mcp` without a key. Call `list_projects` to find the project's ID, then pass it as `projectId` to project-specific tools.
+- **Organization.** Create a named key under **MCP access** in project settings and copy it while it is visible. Use the displayed endpoint and send `Authorization: Bearer <key>`. The key selects the project, so read project guidance with `list_templates` using `{"guidanceOnly":true}`. Choose append access for submission, or manage access when the agent also needs to read and triage existing cards. Revoke the key when the agent's work is done.
+
+### Share a finding
+
+Open a finding and click **Copy link**, or copy the address from your browser. The link opens the card in the same workspace, including after sign-in. In the static app, findings are stored in the browser, so the receiving browser needs to have the original record.
+
+An agent connected to the same Peng instance can read the card by passing the full link to `get_finding`, for example `{"url":"https://peng.example/ABEiM0RVZneImaq7zN3u_w/_-7dzLuqmYh3ZlVEMyIRAA"}`. The two path segments match the project and finding IDs used by Peng MCP. In organization mode, the agent needs a manage key for that project.
+
+### Ports and HTTPS
+
+Compose publishes nginx on `127.0.0.1`. The default `PENG_PORT=0` picks a free port. Set `PENG_PORT=43103` in `.env` for a fixed port. Keep local mode on loopback.
+
+For organization mode over HTTPS, point your TLS reverse proxy at the fixed loopback port, preserve the public `Host`, set `X-Forwarded-Proto: https`, and allow streaming responses on `/mcp`. Set `APP_ORIGIN=https://your-public-host` and `COOKIE_SECURE=true` in `.env`, then run `docker compose up -d --wait`.
+
+Set writing instructions in project settings and have the agent read them once per project in each reporting session. Reuse the same idempotency key when retrying. Findings appear in the open editor after the next refresh. To move reports from the static browser workspace to Docker, export JSON from the static app and import it in Docker. See the [backend reference](server/README.md) for API and MCP tool inputs.
 
 ## Usage
 

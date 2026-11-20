@@ -1,14 +1,20 @@
+import type { DeploymentMode } from '../../lib/api';
+import LocalMcpAccess from './LocalMcpAccess';
+import ProjectMcpKeys from './ProjectMcpKeys';
 import { Settings, FileText, Users, Calendar, Shield, Bookmark } from 'lucide-react';
 import RichTextEditor from '../editor/RichTextEditor';
+import ProjectFindingStatuses from './ProjectFindingStatuses';
 import ScopeList from './ScopeList';
 import type { Project, Classification } from '../../types';
+import { TEMPLATE_INSTRUCTIONS_LIMIT } from '../../constants';
 
 interface ProjectSettingsProps {
     project: Project;
-    onUpdate: (field: keyof Project, value: string) => void;
+    mode?: DeploymentMode;
+    onUpdate: <K extends keyof Project>(field: K, value: Project[K]) => void;
 }
 
-export default function ProjectSettings({ project, onUpdate }: ProjectSettingsProps) {
+export default function ProjectSettings({ project, mode, onUpdate }: ProjectSettingsProps) {
     return (
         <main className="flex-1 flex flex-col min-w-0 bg-[#09090b] relative print:bg-white print:text-black">
             <div className="flex-1 overflow-y-auto print:overflow-visible">
@@ -139,6 +145,11 @@ export default function ProjectSettings({ project, onUpdate }: ProjectSettingsPr
 
                         <div className="border-t border-zinc-800/50" />
 
+                        <ProjectFindingStatuses
+                            statuses={project.customFindingStatuses}
+                            onChange={(statuses) => onUpdate('customFindingStatuses', statuses)}
+                        />
+
                         {/* Scope */}
                         <div>
                             <h3 className="flex items-center text-lg font-semibold text-zinc-100 print:text-black mb-3">
@@ -161,6 +172,25 @@ export default function ProjectSettings({ project, onUpdate }: ProjectSettingsPr
                                 onChange={(value) => onUpdate('executiveSummary', value)}
                             />
                         </div>
+
+                        {mode && (
+                            <>
+                                <label className="block space-y-2">
+                                    <span className="block text-lg font-semibold text-zinc-100">Template instructions</span>
+                                    <span className="block text-sm text-zinc-400">Project guidance for agents writing findings.</span>
+                                    <textarea
+                                        rows={5}
+                                        maxLength={TEMPLATE_INSTRUCTIONS_LIMIT}
+                                        value={project.templateInstructions ?? ''}
+                                        onChange={(event) => onUpdate('templateInstructions', event.target.value)}
+                                        className="w-full rounded-lg border border-zinc-800 bg-zinc-900/50 px-4 py-3 text-sm text-zinc-200 focus:border-emerald-500/50 focus:outline-none"
+                                    />
+                                </label>
+                                {mode === 'local'
+                                    ? <LocalMcpAccess />
+                                    : <ProjectMcpKeys key={project.id} projectId={project.id} />}
+                            </>
+                        )}
 
                     </div>
                 </div>

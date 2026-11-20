@@ -1,7 +1,17 @@
+import { createWorkspaceId } from './findingLink';
+import type { CustomFindingStatus } from './findingStatus';
+
 export type Severity = 'Critical' | 'High' | 'Medium' | 'Low' | 'Info';
 export type Classification = 'Confidential' | 'Internal' | 'Public';
-export type FindingStatus = 'Open' | 'Fixed' | 'Accepted Risk';
-export type ScopeType = 'Web App' | 'API' | 'Network' | 'Mobile' | 'Other';
+export type FindingStatus = string;
+export const FINDING_CONFIDENCES = ['high', 'medium', 'low'] as const;
+export type FindingConfidence = typeof FINDING_CONFIDENCES[number];
+
+export function findingStatusLabel(status: FindingStatus): string {
+    return status === 'Open' ? 'Open (legacy)' : status;
+}
+const SCOPE_TYPES = ['Web App', 'API', 'Network', 'Mobile', 'Other'] as const;
+export type ScopeType = typeof SCOPE_TYPES[number];
 
 export interface ScopeItem {
     id: string;
@@ -10,12 +20,33 @@ export interface ScopeItem {
     included: boolean; // true = In Scope, false = Out of Scope
 }
 
-export function parseScopeItems(scope: string): ScopeItem[] {
+function readScopeItems(scope: string): unknown[] | undefined {
+    if (scope === '') return [];
     try {
-        const parsed = JSON.parse(scope);
+        const parsed: unknown = JSON.parse(scope);
         if (Array.isArray(parsed)) return parsed;
-    } catch { /* not JSON */ }
-    return [];
+    } catch { /* Invalid JSON. */ }
+}
+
+function validScopeItems(items: unknown[]): ScopeItem[] {
+    const ids = new Set<string>();
+    return items.filter((item): item is ScopeItem => {
+        if (!item || typeof item !== 'object') return false;
+        const { id, value, type, included } = item as Partial<ScopeItem>;
+        if (typeof id !== 'string' || !id || ids.has(id) || typeof value !== 'string'
+            || !type || !SCOPE_TYPES.includes(type) || typeof included !== 'boolean') return false;
+        ids.add(id);
+        return true;
+    });
+}
+
+export function isValidScope(scope: string): boolean {
+    const items = readScopeItems(scope);
+    return items !== undefined && validScopeItems(items).length === items.length;
+}
+
+export function parseScopeItems(scope: string): ScopeItem[] {
+    return validScopeItems(readScopeItems(scope) ?? []);
 }
 
 export function stringifyScopeItems(items: ScopeItem[]): string {
@@ -34,11 +65,23 @@ export interface Project {
     classification: Classification;
     scope: string;
     executiveSummary: string;
+    templateInstructions?: string;
+    customFindingStatuses?: CustomFindingStatus[];
     createdAt: string;
     updatedAt: string;
 }
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE' | 'PATCH' | 'OPTIONS' | 'HEAD';
+
+export interface FindingTarget {
+    url: string;
+    method?: string;
+    parameter?: string;
+    host?: string;
+    port?: string;
+}
+
+export const FINDING_TARGET_FIELDS = ['url', 'method', 'parameter', 'host', 'port'] as const;
 
 export interface Finding {
     id: string;
@@ -46,6 +89,13 @@ export interface Finding {
     title: string;
     severity: Severity;
     status: FindingStatus;
+    confidence?: FindingConfidence;
+    triageNotes?: string;
+    evidence?: string[];
+    targets?: FindingTarget[];
+    templateId?: string;
+    category?: string;
+    tags?: string[];
     // Metadata properties
     url: string;
     method: string;
@@ -67,6 +117,8 @@ export interface Finding {
     createdAt: string;
 }
 
+export type UpdateFindingField = <K extends keyof Finding>(field: K, value: Finding[K]) => void;
+
 export interface SeverityColor {
     bg: string;
     text: string;
@@ -79,7 +131,7 @@ export type SeverityColorMap = Record<Severity, SeverityColor>;
 export function createDefaultProject(name: string): Project {
     const now = new Date().toISOString();
     return {
-        id: crypto.randomUUID(),
+        id: createWorkspaceId(),
         name,
         clientName: '',
         assessorName: '',
@@ -97,11 +149,11 @@ export function createDefaultProject(name: string): Project {
 
 export function createDefaultFinding(projectId: string): Finding {
     return {
-        id: crypto.randomUUID(),
+        id: createWorkspaceId(),
         projectId,
         title: '',
         severity: 'Medium',
-        status: 'Open',
+        status: 'New',
         url: '',
         method: '',
         parameter: '',

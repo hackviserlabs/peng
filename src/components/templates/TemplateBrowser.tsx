@@ -1,3 +1,4 @@
+import { sanitizeRichText } from '../../lib/richText';
 import { useState, useCallback, useEffect } from 'react';
 import { X, Search, Shield, Globe, Server, Wifi, Smartphone, Cloud, Code, Lock, AlertTriangle, Eye, Zap, Bug, MoreHorizontal, Layers, Plus, ChevronLeft } from 'lucide-react';
 import { SEVERITY_COLORS } from '../../constants';
@@ -247,7 +248,7 @@ function PreviewSection({ title, html }: { title: string; html: string }) {
             <h3 className="text-sm font-bold text-emerald-400 uppercase tracking-wider mb-2">{title}</h3>
             <div
                 className="prose prose-sm prose-invert max-w-none text-zinc-300 leading-relaxed template-preview-prose"
-                dangerouslySetInnerHTML={{ __html: html }}
+                dangerouslySetInnerHTML={{ __html: sanitizeRichText(html) }}
             />
         </div>
     );

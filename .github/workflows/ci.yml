@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+
+  docker:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        mode: [local, organization]
+    env:
+      COMPOSE_PROJECT_NAME: peng-ci-${{ github.run_id }}-${{ github.run_attempt }}-${{ matrix.mode }}
+      DEPLOY_MODE: ${{ matrix.mode }}
+      PENG_PORT: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Set organization bootstrap credentials
+        if: ${{ matrix.mode == 'organization' }}
+        run: |
+          password="$(openssl rand -hex 24)"
+          echo "::add-mask::$password"
+          echo "ADMIN_USERNAME=ci-admin" >> "$GITHUB_ENV"
+          echo "ADMIN_PASSWORD=$password" >> "$GITHUB_ENV"
+      - run: docker compose config --quiet
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: server/package-lock.json
+      - run: npm ci --ignore-scripts --prefix server
+      - if: ${{ matrix.mode == 'organization' }}
+        run: npm test --prefix server
+      - name: Build and smoke test the Compose stack
+        run: |
+          docker compose up --build -d --wait --wait-timeout 120
+          address="$(docker compose port web 8080)"
+          case "$address" in 127.0.0.1:*) ;; *) exit 1 ;; esac
+          url="http://$address"
+          curl --fail --silent --show-error --max-time 10 "$url/" | grep -F 'id="root"'
+          curl --fail --silent --show-error --max-time 10 "$url/healthz"
+          SMOKE_URL="$url" node server/scripts/smoke-compose.mjs
+      - name: Show Compose logs
+        if: ${{ failure() }}
+        run: docker compose logs
+      - name: Remove CI containers and volume
+        if: ${{ always() }}
+        run: docker compose down --volumes

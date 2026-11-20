@@ -10,8 +10,8 @@ import {
 } from '../../lib/cvss';
 
 interface CvssCalculatorModalProps {
-    open: boolean;
     onClose: () => void;
+    savedScore: string;
     initialVector?: string;
     onApply: (result: { score: string; severity: Severity; vector: string; applySeverity: boolean }) => void;
 }
@@ -31,30 +31,19 @@ function useDropdown() {
     return { open, setOpen, ref };
 }
 
-export default function CvssCalculatorModal({ open, onClose, initialVector, onApply }: CvssCalculatorModalProps) {
-    const [metrics, setMetrics] = useState<CvssBaseMetrics>(DEFAULT_CVSS_METRICS);
+export default function CvssCalculatorModal({ onClose, savedScore, initialVector, onApply }: CvssCalculatorModalProps) {
+    const [metrics, setMetrics] = useState<CvssBaseMetrics>(() =>
+        parseCvssVector(initialVector ?? '') ?? DEFAULT_CVSS_METRICS);
     const [applySeverity, setApplySeverity] = useState(true);
 
-    const avDropdown = useDropdown();
-    const acDropdown = useDropdown();
-    const prDropdown = useDropdown();
-    const uiDropdown = useDropdown();
-    const sDropdown = useDropdown();
-    const cDropdown = useDropdown();
-    const iDropdown = useDropdown();
-    const aDropdown = useDropdown();
-
-    useEffect(() => {
-        if (!open) return;
-        if (initialVector) {
-            const parsed = parseCvssVector(initialVector);
-            if (parsed) {
-                setMetrics(parsed);
-                return;
-            }
-        }
-        setMetrics(DEFAULT_CVSS_METRICS);
-    }, [open, initialVector]);
+    const { ref: avRef, open: avOpen, setOpen: setAVOpen } = useDropdown();
+    const { ref: acRef, open: acOpen, setOpen: setACOpen } = useDropdown();
+    const { ref: prRef, open: prOpen, setOpen: setPROpen } = useDropdown();
+    const { ref: uiRef, open: uiOpen, setOpen: setUIOpen } = useDropdown();
+    const { ref: sRef, open: sOpen, setOpen: setSOpen } = useDropdown();
+    const { ref: cRef, open: cOpen, setOpen: setCOpen } = useDropdown();
+    const { ref: iRef, open: iOpen, setOpen: setIOpen } = useDropdown();
+    const { ref: aRef, open: aOpen, setOpen: setAOpen } = useDropdown();
 
     const { score, vector, severity } = useMemo(() => {
         const s = calculateCvssScore(metrics);
@@ -67,7 +56,11 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
         };
     }, [metrics]);
 
-    if (!open) return null;
+    const savedScoreValue = savedScore.trim();
+    const showMissingVectorNote = !initialVector?.trim()
+        && savedScoreValue !== ''
+        && Number.isFinite(Number(savedScoreValue))
+        && Number(savedScoreValue) !== score;
 
     const handleApply = () => {
         onApply({
@@ -100,10 +93,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                     <div className="grid grid-cols-2 gap-3">
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">Attack Vector (AV)</label>
-                            <div className="relative" ref={avDropdown.ref}>
+                            <div className="relative" ref={avRef}>
                                 <button
                                     type="button"
-                                    onClick={() => avDropdown.setOpen(!avDropdown.open)}
+                                    onClick={() => setAVOpen(!avOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -113,7 +106,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.AV === 'P' && 'Physical (P)'}
                                     </span>
                                 </button>
-                                {avDropdown.open && (
+                                {avOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'N', label: 'Network (N)' },
@@ -126,7 +119,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, AV: opt.value as CvssBaseMetrics['AV'] }));
-                                                    avDropdown.setOpen(false);
+                                                    setAVOpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.AV === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -142,10 +135,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
 
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">Attack Complexity (AC)</label>
-                            <div className="relative" ref={acDropdown.ref}>
+                            <div className="relative" ref={acRef}>
                                 <button
                                     type="button"
-                                    onClick={() => acDropdown.setOpen(!acDropdown.open)}
+                                    onClick={() => setACOpen(!acOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -153,7 +146,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.AC === 'H' && 'High (H)'}
                                     </span>
                                 </button>
-                                {acDropdown.open && (
+                                {acOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'L', label: 'Low (L)' },
@@ -164,7 +157,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, AC: opt.value as CvssBaseMetrics['AC'] }));
-                                                    acDropdown.setOpen(false);
+                                                    setACOpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.AC === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -180,10 +173,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
 
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">Privileges Required (PR)</label>
-                            <div className="relative" ref={prDropdown.ref}>
+                            <div className="relative" ref={prRef}>
                                 <button
                                     type="button"
-                                    onClick={() => prDropdown.setOpen(!prDropdown.open)}
+                                    onClick={() => setPROpen(!prOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -192,7 +185,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.PR === 'H' && 'High (H)'}
                                     </span>
                                 </button>
-                                {prDropdown.open && (
+                                {prOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'N', label: 'None (N)' },
@@ -204,7 +197,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, PR: opt.value as CvssBaseMetrics['PR'] }));
-                                                    prDropdown.setOpen(false);
+                                                    setPROpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.PR === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -220,10 +213,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
 
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">User Interaction (UI)</label>
-                            <div className="relative" ref={uiDropdown.ref}>
+                            <div className="relative" ref={uiRef}>
                                 <button
                                     type="button"
-                                    onClick={() => uiDropdown.setOpen(!uiDropdown.open)}
+                                    onClick={() => setUIOpen(!uiOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -231,7 +224,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.UI === 'R' && 'Required (R)'}
                                     </span>
                                 </button>
-                                {uiDropdown.open && (
+                                {uiOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'N', label: 'None (N)' },
@@ -242,7 +235,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, UI: opt.value as CvssBaseMetrics['UI'] }));
-                                                    uiDropdown.setOpen(false);
+                                                    setUIOpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.UI === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -258,10 +251,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
 
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">Scope (S)</label>
-                            <div className="relative" ref={sDropdown.ref}>
+                            <div className="relative" ref={sRef}>
                                 <button
                                     type="button"
-                                    onClick={() => sDropdown.setOpen(!sDropdown.open)}
+                                    onClick={() => setSOpen(!sOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -269,7 +262,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.S === 'C' && 'Changed (C)'}
                                     </span>
                                 </button>
-                                {sDropdown.open && (
+                                {sOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'U', label: 'Unchanged (U)' },
@@ -280,7 +273,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, S: opt.value as CvssBaseMetrics['S'] }));
-                                                    sDropdown.setOpen(false);
+                                                    setSOpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.S === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -298,10 +291,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
 
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">Confidentiality (C)</label>
-                            <div className="relative" ref={cDropdown.ref}>
+                            <div className="relative" ref={cRef}>
                                 <button
                                     type="button"
-                                    onClick={() => cDropdown.setOpen(!cDropdown.open)}
+                                    onClick={() => setCOpen(!cOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -310,7 +303,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.C === 'H' && 'High (H)'}
                                     </span>
                                 </button>
-                                {cDropdown.open && (
+                                {cOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'N', label: 'None (N)' },
@@ -322,7 +315,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, C: opt.value as CvssBaseMetrics['C'] }));
-                                                    cDropdown.setOpen(false);
+                                                    setCOpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.C === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -338,10 +331,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
 
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">Integrity (I)</label>
-                            <div className="relative" ref={iDropdown.ref}>
+                            <div className="relative" ref={iRef}>
                                 <button
                                     type="button"
-                                    onClick={() => iDropdown.setOpen(!iDropdown.open)}
+                                    onClick={() => setIOpen(!iOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -350,7 +343,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.I === 'H' && 'High (H)'}
                                     </span>
                                 </button>
-                                {iDropdown.open && (
+                                {iOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'N', label: 'None (N)' },
@@ -362,7 +355,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, I: opt.value as CvssBaseMetrics['I'] }));
-                                                    iDropdown.setOpen(false);
+                                                    setIOpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.I === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -378,10 +371,10 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
 
                         <div className="space-y-1.5">
                             <label className="text-[11px] font-medium text-zinc-400 uppercase tracking-wide">Availability (A)</label>
-                            <div className="relative" ref={aDropdown.ref}>
+                            <div className="relative" ref={aRef}>
                                 <button
                                     type="button"
-                                    onClick={() => aDropdown.setOpen(!aDropdown.open)}
+                                    onClick={() => setAOpen(!aOpen)}
                                     className="w-full flex items-center justify-between text-xs px-2 py-1.5 rounded-md border border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800/60 hover:border-zinc-600 transition-colors"
                                 >
                                     <span>
@@ -390,7 +383,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                         {metrics.A === 'H' && 'High (H)'}
                                     </span>
                                 </button>
-                                {aDropdown.open && (
+                                {aOpen && (
                                     <div className="absolute top-full left-0 mt-1 z-50 bg-zinc-900 border border-zinc-800 rounded-lg shadow-2xl py-1 min-w-full">
                                         {[
                                             { value: 'N', label: 'None (N)' },
@@ -402,7 +395,7 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                                                 type="button"
                                                 onClick={() => {
                                                     setMetrics((prev) => ({ ...prev, A: opt.value as CvssBaseMetrics['A'] }));
-                                                    aDropdown.setOpen(false);
+                                                    setAOpen(false);
                                                 }}
                                                 className={`w-full text-left text-xs px-2.5 py-1.5 transition-colors ${
                                                     metrics.A === opt.value ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-300 hover:bg-zinc-800/60'
@@ -418,6 +411,11 @@ export default function CvssCalculatorModal({ open, onClose, initialVector, onAp
                     </div>
 
                     <div className="border border-zinc-800 rounded-lg p-3 bg-zinc-950/60">
+                        {showMissingVectorNote && (
+                            <p role="status" className="mb-3 rounded-md border border-amber-500/20 bg-amber-500/10 px-2.5 py-2 text-xs text-amber-300">
+                                This finding saved a CVSS score of {savedScoreValue} without a vector. The calculator uses the metrics shown above, so its score differs.
+                            </p>
+                        )}
                         <div className="flex items-center justify-between">
                             <div>
                                 <div className="text-[11px] text-zinc-500 uppercase tracking-wide mb-1">Base Score</div>

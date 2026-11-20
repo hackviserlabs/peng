@@ -3,21 +3,56 @@ import { Settings, Filter, FileOutput, BookOpen } from 'lucide-react';
 import SidebarHeader from './SidebarHeader';
 import FindingList from './FindingList';
 import type { Finding, Severity, FindingStatus } from '../../types';
+import { findingStatusLabel } from '../../types';
+import { findingStatusNames, type CustomFindingStatus } from '../../types/findingStatus';
 import { ALL_TEMPLATES } from '../../data/templates';
-
-type SortMode = 'newest' | 'severity';
 
 const SEVERITY_ORDER: Record<Severity, number> = {
     Critical: 0, High: 1, Medium: 2, Low: 3, Info: 4,
 };
 
+const collator = new Intl.Collator(undefined, { numeric: true, sensitivity: 'base' });
+
+function compareOptional<T>(a: T | undefined, b: T | undefined, compare: (a: T, b: T) => number) {
+    if (a === undefined) return b === undefined ? 0 : 1;
+    if (b === undefined) return -1;
+    return compare(a, b);
+}
+
+function creationTime(finding: Finding) {
+    const time = Date.parse(finding.createdAt);
+    return Number.isFinite(time) ? time : undefined;
+}
+
+function cvssScore(finding: Finding) {
+    const value = finding.cvss?.trim();
+    const score = value ? Number(value) : NaN;
+    return score >= 0 && score <= 10 ? score : undefined;
+}
+
+const SORT_OPTIONS = {
+    newest: { label: 'Newest first', compare: (a, b) => compareOptional(creationTime(a), creationTime(b), (x, y) => y - x) },
+    oldest: { label: 'Oldest first', compare: (a, b) => compareOptional(creationTime(a), creationTime(b), (x, y) => x - y) },
+    severity: { label: 'Severity: highest first', compare: (a, b) => SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity] },
+    severityAsc: { label: 'Severity: lowest first', compare: (a, b) => SEVERITY_ORDER[b.severity] - SEVERITY_ORDER[a.severity] },
+    cvssDesc: { label: 'CVSS: highest first', compare: (a, b) => compareOptional(cvssScore(a), cvssScore(b), (x, y) => y - x) },
+    cvssAsc: { label: 'CVSS: lowest first', compare: (a, b) => compareOptional(cvssScore(a), cvssScore(b), (x, y) => x - y) },
+    titleAsc: { label: 'Title: A–Z', compare: (a, b) => compareOptional(a.title.trim() || undefined, b.title.trim() || undefined, collator.compare) },
+    titleDesc: { label: 'Title: Z–A', compare: (a, b) => compareOptional(a.title.trim() || undefined, b.title.trim() || undefined, (x, y) => collator.compare(y, x)) },
+    status: { label: 'Status: A–Z', compare: (a, b) => collator.compare(findingStatusLabel(a.status), findingStatusLabel(b.status)) },
+    category: { label: 'Category: A–Z', compare: (a, b) => compareOptional(a.category?.trim() || undefined, b.category?.trim() || undefined, collator.compare) },
+} satisfies Record<string, { label: string; compare: (a: Finding, b: Finding) => number }>;
+
+type SortMode = keyof typeof SORT_OPTIONS;
+
 interface SidebarProps {
     projectName: string;
     findings: Finding[];
+    customStatuses?: readonly CustomFindingStatus[];
     selectedFindingId: string | null;
     activeView: 'editor' | 'settings';
     searchTerm: string;
-    lastSaved: Date | null;
+    saveStatus?: 'saving' | 'saved';
     onSearchChange: (value: string) => void;
     onSelectFinding: (id: string) => void;
     onAddFinding: () => void;
@@ -33,10 +68,11 @@ interface SidebarProps {
 export default function Sidebar({
     projectName,
     findings,
+    customStatuses,
     selectedFindingId,
     activeView,
     searchTerm,
-    lastSaved,
+    saveStatus,
     onSearchChange,
     onSelectFinding,
     onAddFinding,
@@ -50,28 +86,26 @@ export default function Sidebar({
 }: SidebarProps) {
     const [sortMode, setSortMode] = useState<SortMode>('newest');
     const [filterSeverity, setFilterSeverity] = useState<Severity | 'All'>('All');
-    const [filterStatus, setFilterStatus] = useState<FindingStatus | 'All'>('All');
+    const [filterStatus, setFilterStatus] = useState<FindingStatus | null>(null);
     const [showFilters, setShowFilters] = useState(false);
 
     // Apply filters
     let filtered = findings;
     if (filterSeverity !== 'All') filtered = filtered.filter((f) => f.severity === filterSeverity);
-    if (filterStatus !== 'All') filtered = filtered.filter((f) => f.status === filterStatus);
+    if (filterStatus !== null) filtered = filtered.filter((f) => f.status === filterStatus);
 
     // Apply sort
-    const sorted = [...filtered].sort((a, b) => {
-        if (sortMode === 'severity') return SEVERITY_ORDER[a.severity] - SEVERITY_ORDER[b.severity];
-        return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
-    });
+    const compare = SORT_OPTIONS[sortMode].compare;
+    const sorted = [...filtered].sort((a, b) => compare(a, b) || SORT_OPTIONS.newest.compare(a, b));
 
-    const activeFilters = (filterSeverity !== 'All' ? 1 : 0) + (filterStatus !== 'All' ? 1 : 0);
+    const activeFilters = (filterSeverity !== 'All' ? 1 : 0) + (filterStatus !== null ? 1 : 0);
 
     return (
         <aside className="w-80 flex flex-col bg-[#121214] border-r border-zinc-800/50 print:hidden shrink-0">
             <SidebarHeader
                 projectName={projectName}
                 searchTerm={searchTerm}
-                lastSaved={lastSaved}
+                saveStatus={saveStatus}
                 onSearchChange={onSearchChange}
                 onAddFinding={onAddFinding}
                 onExport={onExport}
@@ -89,12 +123,14 @@ export default function Sidebar({
                     {activeFilters > 0 && <span className="bg-emerald-500 text-black text-[9px] font-bold w-3.5 h-3.5 rounded-full flex items-center justify-center">{activeFilters}</span>}
                 </button>
                 <select
+                    aria-label="Sort findings"
                     value={sortMode}
                     onChange={(e) => setSortMode(e.target.value as SortMode)}
                     className="text-[11px] bg-transparent text-zinc-500 hover:text-zinc-300 outline-none cursor-pointer"
                 >
-                    <option value="newest">Newest first</option>
-                    <option value="severity">By severity</option>
+                    {Object.entries(SORT_OPTIONS).map(([value, { label }]) => (
+                        <option key={value} value={value}>{label}</option>
+                    ))}
                 </select>
                 <span className="ml-auto text-[10px] text-zinc-600">{sorted.length}/{findings.length}</span>
             </div>
@@ -112,13 +148,13 @@ export default function Sidebar({
                         </button>
                     ))}
                     <span className="w-px h-4 bg-zinc-800 self-center mx-0.5" />
-                    {(['All', 'Open', 'Fixed', 'Accepted Risk'] as const).map((st) => (
+                    {[null, ...findingStatusNames(customStatuses, findings.map(finding => finding.status))].map((st) => (
                         <button
-                            key={st}
+                            key={st ?? ''}
                             onClick={() => setFilterStatus(st)}
                             className={`text-[10px] font-medium px-2 py-0.5 rounded transition-colors ${filterStatus === st ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300 hover:bg-zinc-800/60'}`}
                         >
-                            {st}
+                            {st === null ? 'All statuses' : findingStatusLabel(st)}
                         </button>
                     ))}
                 </div>
@@ -126,6 +162,7 @@ export default function Sidebar({
 
             <FindingList
                 findings={sorted}
+                customStatuses={customStatuses}
                 selectedFindingId={selectedFindingId}
                 onSelectFinding={onSelectFinding}
                 onDeleteFinding={onDeleteFinding}
